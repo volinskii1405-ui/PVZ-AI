@@ -23,7 +23,8 @@ constexpr int FIELD_W = COLS * CELL;
 constexpr int FIELD_H = ROWS * CELL;
 constexpr int WIN_W = FIELD_X * 2 + FIELD_W;
 constexpr int WIN_H = FIELD_Y + FIELD_H + 20;
-constexpr int WIN_KILLS = 15;
+constexpr int WIN_KILLS = 10;
+constexpr Uint32 PREP_MS = 15000;  // время на подготовку перед первым зомби
 
 enum class PlantType { OilShooter, Sunflower };
 enum class ZombieType { Basic };
@@ -109,12 +110,116 @@ void drawFilledCircle(SDL_Renderer* r, int cx, int cy, int radius,
   }
 }
 
+// Яркая, хорошо заметная на газоне семечка: тёмная обводка + сочная
+// жёлто-зелёная заливка + светлый блик.
+void drawSeedIcon(SDL_Renderer* r, int cx, int cy, int radius) {
+  drawFilledCircle(r, cx, cy, radius, SDL_Color{50, 40, 10, 255});
+  drawFilledCircle(r, cx, cy, radius - 2, SDL_Color{223, 194, 58, 255});
+  drawFilledCircle(r, cx - radius / 4, cy - radius / 4, radius / 3,
+                    SDL_Color{255, 245, 190, 255});
+}
+
 void drawRect(SDL_Renderer* r, SDL_Rect rect, SDL_Color c, bool filled = true) {
   SDL_SetRenderDrawColor(r, c.r, c.g, c.b, c.a);
   if (filled)
     SDL_RenderFillRect(r, &rect);
   else
     SDL_RenderDrawRect(r, &rect);
+}
+
+// Заливка выпуклого многоугольника (веером треугольников).
+void drawFilledPolygon(SDL_Renderer* r, const std::vector<SDL_FPoint>& pts,
+                        SDL_Color color) {
+  if (pts.size() < 3) return;
+  std::vector<SDL_Vertex> verts(pts.size());
+  for (size_t i = 0; i < pts.size(); ++i) {
+    verts[i].position = pts[i];
+    verts[i].color = color;
+    verts[i].tex_coord = SDL_FPoint{0, 0};
+  }
+  std::vector<int> indices;
+  indices.reserve((pts.size() - 2) * 3);
+  for (size_t i = 1; i + 1 < pts.size(); ++i) {
+    indices.push_back(0);
+    indices.push_back(static_cast<int>(i));
+    indices.push_back(static_cast<int>(i + 1));
+  }
+  SDL_RenderGeometry(r, nullptr, verts.data(), static_cast<int>(verts.size()),
+                      indices.data(), static_cast<int>(indices.size()));
+}
+
+// Рисует Маслострел как настоящее растение (горшок, стебель, листья,
+// голова с лицом и "маслянный" ствол-пушка), а не как кружок.
+// cx/cyCenter — центр клетки; scale позволяет уменьшить иконку для магазина.
+void drawOilShooter(SDL_Renderer* r, int cx, int cyCenter, float scale) {
+  auto off = [scale](float v) { return v * scale; };
+
+  int headY = cyCenter - static_cast<int>(off(20));
+  int headR = std::max(4, static_cast<int>(off(26)));
+  int potTopY = cyCenter + static_cast<int>(off(16));
+  int potBottomY = cyCenter + static_cast<int>(off(34));
+
+  SDL_Color potOutline{74, 51, 36, 255};
+  SDL_Color potColor{121, 85, 61, 255};
+  drawFilledPolygon(
+      r,
+      {{float(cx) - off(24), float(potTopY) - off(2)},
+       {float(cx) + off(24), float(potTopY) - off(2)},
+       {float(cx) + off(15), float(potBottomY) + off(2)},
+       {float(cx) - off(15), float(potBottomY) + off(2)}},
+      potOutline);
+  drawFilledPolygon(r,
+                     {{float(cx) - off(20), float(potTopY)},
+                      {float(cx) + off(20), float(potTopY)},
+                      {float(cx) + off(13), float(potBottomY)},
+                      {float(cx) - off(13), float(potBottomY)}},
+                     potColor);
+
+  // Ствол — тёмный, чтобы не сливаться с газоном.
+  SDL_Color stemColor{34, 90, 40, 255};
+  int stemW = std::max(2, static_cast<int>(off(10)));
+  int stemTop = headY + headR - static_cast<int>(off(6));
+  drawRect(r, SDL_Rect{cx - stemW / 2, stemTop, stemW, potTopY - stemTop},
+           stemColor);
+
+  // Листья — с тёмной обводкой и насыщенным цветом для контраста с травой.
+  SDL_Color leafOutline{20, 60, 26, 255};
+  SDL_Color leafColor{62, 150, 60, 255};
+  int leafBaseY = potTopY - static_cast<int>(off(4));
+  auto drawLeaf = [&](float dir) {
+    std::vector<SDL_FPoint> outline{
+        {float(cx) + dir * off(2), float(leafBaseY) - off(3)},
+        {float(cx) + dir * off(42), float(leafBaseY) - off(20)},
+        {float(cx) + dir * off(10), float(leafBaseY) + off(10)}};
+    std::vector<SDL_FPoint> fill{
+        {float(cx) + dir * off(3), float(leafBaseY) - off(2)},
+        {float(cx) + dir * off(36), float(leafBaseY) - off(16)},
+        {float(cx) + dir * off(9), float(leafBaseY) + off(7)}};
+    drawFilledPolygon(r, outline, leafOutline);
+    drawFilledPolygon(r, fill, leafColor);
+  };
+  drawLeaf(-1.0f);
+  drawLeaf(1.0f);
+
+  drawFilledCircle(r, cx, headY, headR, SDL_Color{40, 40, 40, 255});
+  drawFilledCircle(r, cx, headY, std::max(3, headR - 3),
+                    SDL_Color{235, 193, 60, 255});
+
+  SDL_Color spoutColor{70, 60, 25, 255};
+  int spoutW = std::max(4, static_cast<int>(off(20)));
+  int spoutH = std::max(3, static_cast<int>(off(14)));
+  drawRect(
+      r, SDL_Rect{cx + static_cast<int>(off(16)), headY - spoutH / 2, spoutW, spoutH},
+      spoutColor);
+  drawFilledCircle(r, cx + static_cast<int>(off(36)), headY,
+                    std::max(2, static_cast<int>(off(7))),
+                    SDL_Color{255, 224, 120, 255});
+
+  int eyeR = std::max(1, static_cast<int>(off(3)));
+  drawFilledCircle(r, cx - static_cast<int>(off(8)), headY - static_cast<int>(off(4)),
+                    eyeR, SDL_Color{30, 30, 30, 255});
+  drawFilledCircle(r, cx + static_cast<int>(off(2)), headY - static_cast<int>(off(4)),
+                    eyeR, SDL_Color{30, 30, 30, 255});
 }
 
 class TextRenderer {
@@ -164,11 +269,12 @@ class Game {
     fallingSeeds.clear();
     kills = 0;
     wave = 1;
-    zombieSpawnIntervalMs = 5000;
+    zombieSpawnIntervalMs = 6500;
     seedDropIntervalMs = 8000;
     running = true;
     won = false;
     Uint32 now = SDL_GetTicks();
+    gameStartTime = now;
     lastZombieSpawn = now;
     lastSeedDrop = now;
   }
@@ -184,7 +290,7 @@ class Game {
       float sx = FIELD_X + it->x;
       float sy = FIELD_Y + it->y;
       float dx = mx - sx, dy = my - sy;
-      if (std::sqrt(dx * dx + dy * dy) < 24) {
+      if (std::sqrt(dx * dx + dy * dy) < 28) {
         seeds += it->amount;
         fallingSeeds.erase(it);
         return;
@@ -219,11 +325,12 @@ class Game {
   void update(Uint32 now, Uint32 dt) {
     if (!running) return;
 
-    if (now - lastZombieSpawn > zombieSpawnIntervalMs) {
+    bool inPrep = (now - gameStartTime) < PREP_MS;
+    if (!inPrep && now - lastZombieSpawn > zombieSpawnIntervalMs) {
       spawnZombie();
       lastZombieSpawn = now;
       zombieSpawnIntervalMs =
-          std::max<Uint32>(2200, zombieSpawnIntervalMs - 60);
+          std::max<Uint32>(3200, zombieSpawnIntervalMs - 60);
     }
 
     if (now - lastSeedDrop > seedDropIntervalMs) {
@@ -329,7 +436,8 @@ class Game {
     }
   }
 
-  void render(SDL_Renderer* r, TextRenderer& text) {
+  void render(SDL_Renderer* r, TextRenderer& text, TextRenderer& textMed,
+              TextRenderer& textBig, Uint32 now) {
     drawRect(r, SDL_Rect{0, 0, WIN_W, WIN_H}, SDL_Color{47, 107, 47, 255});
 
     // Поле.
@@ -348,10 +456,12 @@ class Game {
     drawRect(r, SDL_Rect{0, 0, WIN_W, FIELD_Y - 10},
               SDL_Color{139, 90, 43, 255});
     drawRect(r, seedCounterRect, SDL_Color{244, 228, 188, 255});
-    text.draw("Семечки", seedCounterRect.x + 12, seedCounterRect.y + 8,
+    drawRect(r, seedCounterRect, SDL_Color{74, 122, 42, 255}, false);
+    drawSeedIcon(r, seedCounterRect.x + 26, seedCounterRect.y + 50, 14);
+    text.draw("Семечки", seedCounterRect.x + 48, seedCounterRect.y + 8,
                SDL_Color{61, 43, 18, 255});
-    text.draw(std::to_string(seeds), seedCounterRect.x + 12,
-               seedCounterRect.y + 38, SDL_Color{61, 43, 18, 255});
+    textMed.draw(std::to_string(seeds), seedCounterRect.x + 48,
+                  seedCounterRect.y + 34, SDL_Color{110, 74, 10, 255});
 
     drawShopCard(r, text, oilCardRect, PlantType::OilShooter);
     drawShopCard(r, text, sunCardRect, PlantType::Sunflower);
@@ -370,10 +480,13 @@ class Game {
         const PlantDef& def = plantDef(cell->type);
         int cx = FIELD_X + col * CELL + CELL / 2;
         int cy = FIELD_Y + row * CELL + CELL / 2;
-        drawFilledCircle(r, cx, cy, 30, def.color);
-        drawFilledCircle(r, cx, cy, 30, SDL_Color{40, 40, 40, 255});
-        drawFilledCircle(r, cx, cy, 27, def.color);
-        text.draw(def.shortLabel, cx, cy, SDL_Color{40, 30, 10, 255}, true);
+        if (cell->type == PlantType::OilShooter) {
+          drawOilShooter(r, cx, cy, 1.0f);
+        } else {
+          drawFilledCircle(r, cx, cy, 30, SDL_Color{40, 40, 40, 255});
+          drawFilledCircle(r, cx, cy, 27, def.color);
+          text.draw(def.shortLabel, cx, cy, SDL_Color{40, 30, 10, 255}, true);
+        }
         drawHpBar(r, FIELD_X + col * CELL + 20, FIELD_Y + row * CELL + 6, 50,
                    cell->hp, cell->maxHp);
       }
@@ -396,12 +509,29 @@ class Game {
       drawHpBar(r, cx - 25, FIELD_Y + z.row * CELL + 6, 50, z.hp, z.maxHp);
     }
 
-    // Падающие/произведённые семечки.
+    // Падающие/произведённые семечки — крупные и яркие, чтобы не терялись
+    // на фоне газона.
     for (auto& s : fallingSeeds) {
       int cx = FIELD_X + static_cast<int>(s.x);
       int cy = FIELD_Y + static_cast<int>(s.y);
-      drawFilledCircle(r, cx, cy, 12, SDL_Color{102, 187, 106, 255});
-      drawFilledCircle(r, cx, cy, 9, SDL_Color{165, 214, 167, 255});
+      drawSeedIcon(r, cx, cy, 17);
+      text.draw("+" + std::to_string(s.amount), cx, cy - 26,
+                 SDL_Color{255, 250, 210, 255}, true);
+    }
+
+    // Баннер подготовки перед первой волной зомби.
+    Uint32 elapsed = now >= gameStartTime ? now - gameStartTime : 0;
+    if (elapsed < PREP_MS) {
+      Uint32 remainingSec = (PREP_MS - elapsed + 999) / 1000;
+      SDL_Rect banner{FIELD_X, FIELD_Y + FIELD_H / 2 - 32, FIELD_W, 64};
+      SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+      SDL_SetRenderDrawColor(r, 0, 0, 0, 150);
+      SDL_RenderFillRect(r, &banner);
+      SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
+      textBig.draw("Приготовьтесь! Зомби через " +
+                       std::to_string(remainingSec) + " с",
+                   WIN_W / 2, FIELD_Y + FIELD_H / 2,
+                   SDL_Color{255, 235, 180, 255}, true);
     }
 
     // Сетка при выборе растения.
@@ -485,9 +615,13 @@ class Game {
     drawRect(r, rect, bg);
     drawRect(r, rect, SDL_Color{74, 122, 42, 255}, false);
 
-    drawFilledCircle(r, rect.x + rect.w / 2, rect.y + 26, 18, def.color);
-    text.draw(def.shortLabel, rect.x + rect.w / 2, rect.y + 26,
-               SDL_Color{40, 30, 10, 255}, true);
+    if (type == PlantType::OilShooter) {
+      drawOilShooter(r, rect.x + rect.w / 2, rect.y + 28, 0.45f);
+    } else {
+      drawFilledCircle(r, rect.x + rect.w / 2, rect.y + 26, 18, def.color);
+      text.draw(def.shortLabel, rect.x + rect.w / 2, rect.y + 26,
+                 SDL_Color{40, 30, 10, 255}, true);
+    }
     text.draw(def.name, rect.x + rect.w / 2, rect.y + 50,
                SDL_Color{20, 40, 60, 255}, true);
     text.draw(std::to_string(def.cost), rect.x + rect.w / 2, rect.y + 68,
@@ -509,8 +643,9 @@ class Game {
   std::vector<FallingSeed> fallingSeeds;
   int kills = 0;
   int wave = 1;
+  Uint32 gameStartTime = 0;
   Uint32 lastZombieSpawn = 0;
-  Uint32 zombieSpawnIntervalMs = 5000;
+  Uint32 zombieSpawnIntervalMs = 6500;
   Uint32 lastSeedDrop = 0;
   Uint32 seedDropIntervalMs = 8000;
   bool running = true;
@@ -557,14 +692,17 @@ int main(int, char**) {
   }
 
   std::string fontPath = findAssetPath("assets/DejaVuSans-Bold.ttf");
-  TTF_Font* font = TTF_OpenFont(fontPath.c_str(), 16);
   TTF_Font* fontSmall = TTF_OpenFont(fontPath.c_str(), 13);
-  if (!font || !fontSmall) {
+  TTF_Font* fontMed = TTF_OpenFont(fontPath.c_str(), 20);
+  TTF_Font* fontBig = TTF_OpenFont(fontPath.c_str(), 26);
+  if (!fontSmall || !fontMed || !fontBig) {
     SDL_Log("TTF_OpenFont error (%s): %s", fontPath.c_str(), TTF_GetError());
     return 1;
   }
 
   TextRenderer text(renderer, fontSmall);
+  TextRenderer textMed(renderer, fontMed);
+  TextRenderer textBig(renderer, fontBig);
   Game game;
 
   bool quit = false;
@@ -587,14 +725,15 @@ int main(int, char**) {
 
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
-    game.render(renderer, text);
+    game.render(renderer, text, textMed, textBig, now);
     SDL_RenderPresent(renderer);
 
     SDL_Delay(1000 / 60);
   }
 
-  TTF_CloseFont(font);
   TTF_CloseFont(fontSmall);
+  TTF_CloseFont(fontMed);
+  TTF_CloseFont(fontBig);
   SDL_DestroyRenderer(renderer);
   SDL_DestroyWindow(window);
   TTF_Quit();
