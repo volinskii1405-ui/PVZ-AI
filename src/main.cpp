@@ -23,18 +23,23 @@ constexpr int FIELD_W = COLS * CELL;
 constexpr int FIELD_H = ROWS * CELL;
 constexpr int WIN_W = FIELD_X * 2 + FIELD_W;
 constexpr int WIN_H = FIELD_Y + FIELD_H + 20;
-constexpr int WIN_KILLS = 10;
 constexpr Uint32 PREP_MS = 15000;  // время на подготовку перед первым зомби
+
+constexpr int WAVE_COUNT = 5;
+constexpr int WAVE_ZOMBIE_COUNTS[WAVE_COUNT] = {3, 4, 5, 6, 7};
+constexpr Uint32 WAVE_BREAK_MS = 10000;  // перерыв между волнами
+
+Uint32 waveBaseInterval(int waveNum) {
+  return std::max<Uint32>(3000, 8000 - static_cast<Uint32>(waveNum - 1) * 1000);
+}
 
 enum class PlantType { OilShooter, Sunflower };
 enum class ZombieType { Basic };
 
 struct PlantDef {
   std::string name;
-  std::string shortLabel;
   int cost;
   int hp;
-  SDL_Color color;
   Uint32 actionRateMs;  // скорострельность или скорость производства
   int damage;           // урон снаряда (для стрелка)
   int produceAmount;    // количество семечек за раз (для подсолнуха)
@@ -50,10 +55,8 @@ struct ZombieDef {
 };
 
 const PlantDef& plantDef(PlantType t) {
-  static const PlantDef oil{"Маслострел", "МС", 100, 100,
-                             SDL_Color{235, 193, 60, 255}, 1500, 20, 0};
-  static const PlantDef sun{"Подсолнух", "ПД", 50, 80,
-                             SDL_Color{255, 165, 40, 255}, 12000, 0, 25};
+  static const PlantDef oil{"Маслострел", 100, 100, 1500, 20, 0};
+  static const PlantDef sun{"Подсолнух", 50, 80, 12000, 0, 25};
   return t == PlantType::OilShooter ? oil : sun;
 }
 
@@ -148,17 +151,10 @@ void drawFilledPolygon(SDL_Renderer* r, const std::vector<SDL_FPoint>& pts,
                       indices.data(), static_cast<int>(indices.size()));
 }
 
-// Рисует Маслострел как настоящее растение (горшок, стебель, листья,
-// голова с лицом и "маслянный" ствол-пушка), а не как кружок.
-// cx/cyCenter — центр клетки; scale позволяет уменьшить иконку для магазина.
-void drawOilShooter(SDL_Renderer* r, int cx, int cyCenter, float scale) {
+// Общий глиняный горшок для обоих растений.
+void drawPlantPot(SDL_Renderer* r, int cx, int potTopY, int potBottomY,
+                   float scale) {
   auto off = [scale](float v) { return v * scale; };
-
-  int headY = cyCenter - static_cast<int>(off(20));
-  int headR = std::max(4, static_cast<int>(off(26)));
-  int potTopY = cyCenter + static_cast<int>(off(16));
-  int potBottomY = cyCenter + static_cast<int>(off(34));
-
   SDL_Color potOutline{74, 51, 36, 255};
   SDL_Color potColor{121, 85, 61, 255};
   drawFilledPolygon(
@@ -174,18 +170,14 @@ void drawOilShooter(SDL_Renderer* r, int cx, int cyCenter, float scale) {
                       {float(cx) + off(13), float(potBottomY)},
                       {float(cx) - off(13), float(potBottomY)}},
                      potColor);
+}
 
-  // Ствол — тёмный, чтобы не сливаться с газоном.
-  SDL_Color stemColor{34, 90, 40, 255};
-  int stemW = std::max(2, static_cast<int>(off(10)));
-  int stemTop = headY + headR - static_cast<int>(off(6));
-  drawRect(r, SDL_Rect{cx - stemW / 2, stemTop, stemW, potTopY - stemTop},
-           stemColor);
-
-  // Листья — с тёмной обводкой и насыщенным цветом для контраста с травой.
+// Пара листьев у основания стебля — с тёмной обводкой для контраста с
+// травой.
+void drawPlantLeaves(SDL_Renderer* r, int cx, int leafBaseY, float scale) {
+  auto off = [scale](float v) { return v * scale; };
   SDL_Color leafOutline{20, 60, 26, 255};
   SDL_Color leafColor{62, 150, 60, 255};
-  int leafBaseY = potTopY - static_cast<int>(off(4));
   auto drawLeaf = [&](float dir) {
     std::vector<SDL_FPoint> outline{
         {float(cx) + dir * off(2), float(leafBaseY) - off(3)},
@@ -200,26 +192,109 @@ void drawOilShooter(SDL_Renderer* r, int cx, int cyCenter, float scale) {
   };
   drawLeaf(-1.0f);
   drawLeaf(1.0f);
+}
 
-  drawFilledCircle(r, cx, headY, headR, SDL_Color{40, 40, 40, 255});
-  drawFilledCircle(r, cx, headY, std::max(3, headR - 3),
+// Рисует Маслострел как настоящее растение (горшок, стебель, листья,
+// голова с лицом и "маслянный" ствол-пушка), а не как кружок.
+// cx/cyCenter — центр клетки; scale уменьшает иконку для карточки магазина;
+// bobOffset — лёгкое покачивание головы (px); recoilAmount (0..1) — отдача
+// при выстреле, тянет голову назад и зажигает вспышку у дула.
+void drawOilShooter(SDL_Renderer* r, int cx, int cyCenter, float scale,
+                     float bobOffset = 0.0f, float recoilAmount = 0.0f) {
+  auto off = [scale](float v) { return v * scale; };
+
+  int headY = cyCenter - static_cast<int>(off(20)) -
+              static_cast<int>(bobOffset * scale);
+  int headR = std::max(4, static_cast<int>(off(26)));
+  int potTopY = cyCenter + static_cast<int>(off(16));
+  int potBottomY = cyCenter + static_cast<int>(off(34));
+
+  drawPlantPot(r, cx, potTopY, potBottomY, scale);
+
+  // Ствол — тёмный, чтобы не сливаться с газоном.
+  SDL_Color stemColor{34, 90, 40, 255};
+  int stemW = std::max(2, static_cast<int>(off(10)));
+  int stemTop = headY + headR - static_cast<int>(off(6));
+  drawRect(r, SDL_Rect{cx - stemW / 2, stemTop, stemW, potTopY - stemTop},
+           stemColor);
+
+  drawPlantLeaves(r, cx, potTopY - static_cast<int>(off(4)), scale);
+
+  int hcx = cx - static_cast<int>(recoilAmount * off(6));
+
+  drawFilledCircle(r, hcx, headY, headR, SDL_Color{40, 40, 40, 255});
+  drawFilledCircle(r, hcx, headY, std::max(3, headR - 3),
                     SDL_Color{235, 193, 60, 255});
 
   SDL_Color spoutColor{70, 60, 25, 255};
   int spoutW = std::max(4, static_cast<int>(off(20)));
   int spoutH = std::max(3, static_cast<int>(off(14)));
-  drawRect(
-      r, SDL_Rect{cx + static_cast<int>(off(16)), headY - spoutH / 2, spoutW, spoutH},
-      spoutColor);
-  drawFilledCircle(r, cx + static_cast<int>(off(36)), headY,
-                    std::max(2, static_cast<int>(off(7))),
+  int spoutX = hcx + static_cast<int>(off(16));
+  drawRect(r, SDL_Rect{spoutX, headY - spoutH / 2, spoutW, spoutH},
+           spoutColor);
+  int muzzleX = hcx + static_cast<int>(off(36));
+  drawFilledCircle(r, muzzleX, headY, std::max(2, static_cast<int>(off(7))),
                     SDL_Color{255, 224, 120, 255});
 
+  if (recoilAmount > 0.01f) {
+    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+    Uint8 flashAlpha = static_cast<Uint8>(220 * recoilAmount);
+    int flashR = std::max(3, static_cast<int>(off(6) + off(10) * recoilAmount));
+    drawFilledCircle(r, muzzleX + static_cast<int>(off(6)), headY, flashR,
+                      SDL_Color{255, 245, 200, flashAlpha});
+    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
+  }
+
   int eyeR = std::max(1, static_cast<int>(off(3)));
-  drawFilledCircle(r, cx - static_cast<int>(off(8)), headY - static_cast<int>(off(4)),
+  drawFilledCircle(r, hcx - static_cast<int>(off(8)), headY - static_cast<int>(off(4)),
                     eyeR, SDL_Color{30, 30, 30, 255});
-  drawFilledCircle(r, cx + static_cast<int>(off(2)), headY - static_cast<int>(off(4)),
+  drawFilledCircle(r, hcx + static_cast<int>(off(2)), headY - static_cast<int>(off(4)),
                     eyeR, SDL_Color{30, 30, 30, 255});
+}
+
+// Рисует Подсолнух как настоящее растение (горшок, стебель, листья и
+// цветок с лепестками вокруг тёмной сердцевины), а не как кружок.
+void drawSunflower(SDL_Renderer* r, int cx, int cyCenter, float scale) {
+  auto off = [scale](float v) { return v * scale; };
+
+  int headY = cyCenter - static_cast<int>(off(24));
+  int potTopY = cyCenter + static_cast<int>(off(16));
+  int potBottomY = cyCenter + static_cast<int>(off(34));
+
+  drawPlantPot(r, cx, potTopY, potBottomY, scale);
+
+  SDL_Color stemColor{34, 90, 40, 255};
+  int stemW = std::max(2, static_cast<int>(off(9)));
+  int stemTop = headY + static_cast<int>(off(18));
+  drawRect(r, SDL_Rect{cx - stemW / 2, stemTop, stemW, potTopY - stemTop},
+           stemColor);
+
+  drawPlantLeaves(r, cx, potTopY - static_cast<int>(off(4)), scale);
+
+  // Лепестки по кругу вокруг сердцевины.
+  const int PETAL_COUNT = 10;
+  float petalOrbit = off(23);
+  int petalR = std::max(3, static_cast<int>(off(11)));
+  SDL_Color petalOutline{150, 90, 10, 255};
+  SDL_Color petalColor{255, 196, 20, 255};
+  for (int i = 0; i < PETAL_COUNT; ++i) {
+    float angle = (6.28318530f * i) / PETAL_COUNT;
+    int px = cx + static_cast<int>(std::cos(angle) * petalOrbit);
+    int py = headY + static_cast<int>(std::sin(angle) * petalOrbit);
+    drawFilledCircle(r, px, py, petalR + 2, petalOutline);
+    drawFilledCircle(r, px, py, petalR, petalColor);
+  }
+
+  // Сердцевина с лицом.
+  int centerR = std::max(4, static_cast<int>(off(19)));
+  drawFilledCircle(r, cx, headY, centerR + 3, SDL_Color{40, 40, 40, 255});
+  drawFilledCircle(r, cx, headY, centerR, SDL_Color{121, 74, 38, 255});
+
+  int eyeR = std::max(1, static_cast<int>(off(2)));
+  drawFilledCircle(r, cx - static_cast<int>(off(6)), headY - static_cast<int>(off(2)),
+                    eyeR, SDL_Color{25, 15, 8, 255});
+  drawFilledCircle(r, cx + static_cast<int>(off(6)), headY - static_cast<int>(off(2)),
+                    eyeR, SDL_Color{25, 15, 8, 255});
 }
 
 class TextRenderer {
@@ -268,8 +343,12 @@ class Game {
     projectiles.clear();
     fallingSeeds.clear();
     kills = 0;
-    wave = 1;
-    zombieSpawnIntervalMs = 8000;
+    currentWave = 1;
+    killsThisWave = 0;
+    spawnedThisWave = 0;
+    betweenWaves = false;
+    waveBreakEndTime = 0;
+    zombieSpawnIntervalMs = waveBaseInterval(currentWave);
     seedDropIntervalMs = 8000;
     running = true;
     won = false;
@@ -326,9 +405,12 @@ class Game {
     if (!running) return;
 
     bool inPrep = (now - gameStartTime) < PREP_MS;
-    if (!inPrep && now - lastZombieSpawn > zombieSpawnIntervalMs) {
+    int waveTarget = WAVE_ZOMBIE_COUNTS[currentWave - 1];
+    bool canSpawn = !inPrep && !betweenWaves && spawnedThisWave < waveTarget;
+    if (canSpawn && now - lastZombieSpawn > zombieSpawnIntervalMs) {
       spawnZombie();
       lastZombieSpawn = now;
+      ++spawnedThisWave;
       zombieSpawnIntervalMs =
           std::max<Uint32>(3000, zombieSpawnIntervalMs - 400);
     }
@@ -351,8 +433,10 @@ class Game {
                 return z.row == row && z.x > static_cast<float>(col * CELL);
               });
           if (hasTarget && now - plant.lastActionMs > def.actionRateMs) {
-            float py = row * CELL + CELL / 2.0f;
-            float px = col * CELL + CELL / 2.0f + 20.0f;
+            // Совпадает с положением дула в drawOilShooter (headY смещён
+            // на off(20) вверх, дуло выступает на off(36) вправо от головы).
+            float py = row * CELL + CELL / 2.0f - 20.0f;
+            float px = col * CELL + CELL / 2.0f + 36.0f;
             projectiles.push_back(Projectile{px, py, row, def.damage, 0.4f});
             plant.lastActionMs = now;
           }
@@ -391,6 +475,7 @@ class Game {
       if (it->hp <= 0) {
         it = zombies.erase(it);
         ++kills;
+        ++killsThisWave;
         continue;
       }
 
@@ -430,9 +515,23 @@ class Game {
       }
     }
 
-    if (kills >= WIN_KILLS) {
-      running = false;
-      won = true;
+    if (!betweenWaves && spawnedThisWave >= waveTarget && zombies.empty()) {
+      if (currentWave >= WAVE_COUNT) {
+        running = false;
+        won = true;
+      } else {
+        betweenWaves = true;
+        waveBreakEndTime = now + WAVE_BREAK_MS;
+      }
+    }
+
+    if (betweenWaves && now >= waveBreakEndTime) {
+      betweenWaves = false;
+      ++currentWave;
+      killsThisWave = 0;
+      spawnedThisWave = 0;
+      zombieSpawnIntervalMs = waveBaseInterval(currentWave);
+      lastZombieSpawn = now - zombieSpawnIntervalMs - 1;
     }
   }
 
@@ -466,10 +565,11 @@ class Game {
     drawShopCard(r, text, oilCardRect, PlantType::OilShooter);
     drawShopCard(r, text, sunCardRect, PlantType::Sunflower);
 
-    text.draw("Волна: " + std::to_string(wave), 555, 20,
-               SDL_Color{244, 228, 188, 255});
-    text.draw("Зомби: " + std::to_string(kills) + " / " +
-                   std::to_string(WIN_KILLS),
+    text.draw("Волна: " + std::to_string(currentWave) + " / " +
+                   std::to_string(WAVE_COUNT),
+               555, 20, SDL_Color{244, 228, 188, 255});
+    text.draw("Зомби: " + std::to_string(killsThisWave) + " / " +
+                   std::to_string(WAVE_ZOMBIE_COUNTS[currentWave - 1]),
                555, 46, SDL_Color{244, 228, 188, 255});
 
     // Растения.
@@ -477,15 +577,17 @@ class Game {
       for (int col = 0; col < COLS; ++col) {
         auto& cell = grid[row][col];
         if (!cell.has_value()) continue;
-        const PlantDef& def = plantDef(cell->type);
         int cx = FIELD_X + col * CELL + CELL / 2;
         int cy = FIELD_Y + row * CELL + CELL / 2;
         if (cell->type == PlantType::OilShooter) {
-          drawOilShooter(r, cx, cy, 1.0f);
+          float bob = std::sin(now / 260.0) * 2.0f;
+          Uint32 sinceAction = now - cell->lastActionMs;
+          float recoil = sinceAction < 140
+                             ? (1.0f - sinceAction / 140.0f)
+                             : 0.0f;
+          drawOilShooter(r, cx, cy, 1.0f, bob, recoil);
         } else {
-          drawFilledCircle(r, cx, cy, 30, SDL_Color{40, 40, 40, 255});
-          drawFilledCircle(r, cx, cy, 27, def.color);
-          text.draw(def.shortLabel, cx, cy, SDL_Color{40, 30, 10, 255}, true);
+          drawSunflower(r, cx, cy, 1.0f);
         }
         drawHpBar(r, FIELD_X + col * CELL + 20, FIELD_Y + row * CELL + 6, 50,
                    cell->hp, cell->maxHp);
@@ -519,18 +621,27 @@ class Game {
                  SDL_Color{255, 250, 210, 255}, true);
     }
 
-    // Баннер подготовки перед первой волной зомби.
+    // Баннер подготовки перед первой волной зомби / паузы между волнами.
     Uint32 elapsed = now >= gameStartTime ? now - gameStartTime : 0;
+    std::string bannerMsg;
     if (elapsed < PREP_MS) {
       Uint32 remainingSec = (PREP_MS - elapsed + 999) / 1000;
+      bannerMsg =
+          "Приготовьтесь! Зомби через " + std::to_string(remainingSec) + " с";
+    } else if (betweenWaves) {
+      Uint32 remain = waveBreakEndTime > now ? waveBreakEndTime - now : 0;
+      Uint32 remainingSec = (remain + 999) / 1000;
+      bannerMsg = "Волна " + std::to_string(currentWave) +
+                  " пройдена! Следующая через " + std::to_string(remainingSec) +
+                  " с";
+    }
+    if (!bannerMsg.empty()) {
       SDL_Rect banner{FIELD_X, FIELD_Y + FIELD_H / 2 - 32, FIELD_W, 64};
       SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
       SDL_SetRenderDrawColor(r, 0, 0, 0, 150);
       SDL_RenderFillRect(r, &banner);
       SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
-      textBig.draw("Приготовьтесь! Зомби через " +
-                       std::to_string(remainingSec) + " с",
-                   WIN_W / 2, FIELD_Y + FIELD_H / 2,
+      textBig.draw(bannerMsg, WIN_W / 2, FIELD_Y + FIELD_H / 2,
                    SDL_Color{255, 235, 180, 255}, true);
     }
 
@@ -552,11 +663,13 @@ class Game {
       SDL_RenderFillRect(r, &overlay);
       SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
 
+      int totalZombies = 0;
+      for (int c : WAVE_ZOMBIE_COUNTS) totalZombies += c;
       std::string title =
           won ? "Победа!" : "Зомби съели ваш мозг!";
       std::string subtitle =
-          won ? "Вы отбились от " + std::to_string(WIN_KILLS) +
-                    " зомби с помощью Маслострела!"
+          won ? "Вы отбились от всех " + std::to_string(WAVE_COUNT) +
+                    " волн (" + std::to_string(totalZombies) + " зомби)!"
               : "Зомби прорвались через лужайку.";
       text.draw(title, WIN_W / 2, WIN_H / 2 - 60,
                  SDL_Color{244, 228, 188, 255}, true);
@@ -618,9 +731,7 @@ class Game {
     if (type == PlantType::OilShooter) {
       drawOilShooter(r, rect.x + rect.w / 2, rect.y + 28, 0.45f);
     } else {
-      drawFilledCircle(r, rect.x + rect.w / 2, rect.y + 26, 18, def.color);
-      text.draw(def.shortLabel, rect.x + rect.w / 2, rect.y + 26,
-                 SDL_Color{40, 30, 10, 255}, true);
+      drawSunflower(r, rect.x + rect.w / 2, rect.y + 30, 0.45f);
     }
     text.draw(def.name, rect.x + rect.w / 2, rect.y + 50,
                SDL_Color{20, 40, 60, 255}, true);
@@ -642,7 +753,11 @@ class Game {
   std::vector<Projectile> projectiles;
   std::vector<FallingSeed> fallingSeeds;
   int kills = 0;
-  int wave = 1;
+  int currentWave = 1;
+  int killsThisWave = 0;
+  int spawnedThisWave = 0;
+  bool betweenWaves = false;
+  Uint32 waveBreakEndTime = 0;
   Uint32 gameStartTime = 0;
   Uint32 lastZombieSpawn = 0;
   Uint32 zombieSpawnIntervalMs = 8000;
