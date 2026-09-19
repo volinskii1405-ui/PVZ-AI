@@ -38,7 +38,7 @@ Uint32 waveBaseInterval(int waveNum) {
   return std::max<Uint32>(3000, 8000 - static_cast<Uint32>(waveNum - 1) * 1000);
 }
 
-enum class PlantType { OilShooter, Sunflower, Chomper };
+enum class PlantType { OilShooter, Sunflower, Catapult };
 enum class ZombieType { Basic, Conehead, Crazy, Mutant };
 
 struct PlantDef {
@@ -46,8 +46,8 @@ struct PlantDef {
   int cost;
   int hp;
   Uint32 actionRateMs;  // скорострельность/скорость производства/перезарядка
-                         // укуса (для Кусача)
-  int damage;           // урон снаряда (для стрелка)
+                         // броска (для Катапульты)
+  int damage;           // урон снаряда/броска
   int produceAmount;    // количество семечек за раз (для подсолнуха)
   Uint32 plantCooldownMs;  // время до повторного доступа к посадке в магазине
 };
@@ -63,15 +63,16 @@ struct ZombieDef {
 const PlantDef& plantDef(PlantType t) {
   static const PlantDef oil{"Маслострел", 100, 100, 1950, 20, 0, 8000};
   static const PlantDef sun{"Подсолнух", 50, 80, 12000, 0, 25, 5000};
-  // Кусач: вместо стрельбы мгновенно съедает зомби, вплотную подошедшего к
-  // нему, но после этого долго "переваривает" (actionRateMs — перезарядка
-  // укуса), пока уязвим как обычное растение.
-  static const PlantDef chomper{"Кусач", 175, 120, 16000, 0, 0, 12000};
+  // Катапульта: не наносит урон по чуть-чуть, а раз в actionRateMs
+  // хватает ближайшего зомби в своём ряду и зашвыривает его обратно к
+  // правому краю поля (плюс немного урона от удара) — уникальная фишка,
+  // которой нет в оригинальной PVZ.
+  static const PlantDef catapult{"Катапульта", 150, 90, 9000, 25, 0, 10000};
   switch (t) {
     case PlantType::Sunflower:
       return sun;
-    case PlantType::Chomper:
-      return chomper;
+    case PlantType::Catapult:
+      return catapult;
     default:
       return oil;
   }
@@ -134,7 +135,7 @@ struct FallingSeed {
 SDL_Rect seedCounterRect{15, 15, 150, 80};
 SDL_Rect oilCardRect{175, 15, 90, 80};
 SDL_Rect sunCardRect{270, 15, 90, 80};
-SDL_Rect chomperCardRect{365, 15, 90, 80};
+SDL_Rect catapultCardRect{365, 15, 90, 80};
 SDL_Rect shovelRect{460, 15, 80, 80};
 SDL_Rect restartBtnRect{WIN_W / 2 - 90, WIN_H / 2 + 30, 180, 46};
 
@@ -414,74 +415,77 @@ void drawSunflower(SDL_Renderer* r, int cx, int cyCenter, float scale,
                     eyeR, SDL_Color{25, 15, 8, 255});
 }
 
-// Рисует Кусача — растение-ловушку с большой пастью вместо ствола-пушки.
-// Его уникальная фишка: он не стреляет, а мгновенно съедает зомби, вплотную
-// подошедшего к нему, но затем долго "переваривает" (пока digesting=true).
-// ready=true — пасть открыта с зубами, готов кусать; digesting=false —
-// закрытая довольная улыбка и раздутое тело. bobOffset — покачивание;
-// chompPulse (0..1) — короткий рывок пасти в момент укуса.
-void drawChomper(SDL_Renderer* r, int cx, int cyCenter, float scale,
-                  bool ready, float bobOffset = 0.0f, float chompPulse = 0.0f) {
+// Рисует Катапульту — растение с закрученной лозой-рычагом вместо
+// ствола-пушки. Его уникальная фишка (которой нет в оригинальной PVZ):
+// он не ранит зомби понемногу, а раз в actionRateMs хватает ближайшего
+// зомби в ряду и зашвыривает его обратно к началу поля. launchPulse
+// (0..1, короткий всплеск сразу после броска) резко взмахивает рычагом
+// вперёд-вверх; всё остальное время рычаг взведён назад, будто
+// заряжен. bobOffset — лёгкое покачивание.
+void drawCatapult(SDL_Renderer* r, int cx, int cyCenter, float scale,
+                   float bobOffset = 0.0f, float launchPulse = 0.0f) {
   auto off = [scale](float v) { return v * scale; };
 
-  int headY = cyCenter - static_cast<int>(off(18)) -
-              static_cast<int>(bobOffset * scale);
+  int pivotY = cyCenter - static_cast<int>(off(20)) -
+               static_cast<int>(bobOffset * scale);
   int potTopY = cyCenter + static_cast<int>(off(16));
   int potBottomY = cyCenter + static_cast<int>(off(34));
 
   drawPlantPot(r, cx, potTopY, potBottomY, scale);
 
   SDL_Color stemColor{34, 90, 40, 255};
-  int stemW = std::max(2, static_cast<int>(off(9)));
-  int stemTop = headY + static_cast<int>(off(20));
-  drawRect(r, SDL_Rect{cx - stemW / 2, stemTop, stemW, potTopY - stemTop},
+  int stemW = std::max(2, static_cast<int>(off(10)));
+  drawRect(r, SDL_Rect{cx - stemW / 2, pivotY, stemW, potTopY - pivotY},
            stemColor);
 
   drawPlantLeaves(r, cx, potTopY - static_cast<int>(off(4)), scale);
 
-  // Раздутое тело, когда переваривает предыдущий укус.
-  int bodyR = std::max(6, static_cast<int>(off(28) + (ready ? 0.0f : off(4))));
-  SDL_Color bodyOutline{20, 70, 25, 255};
-  SDL_Color bodyColor =
-      ready ? SDL_Color{58, 150, 66, 255} : SDL_Color{80, 140, 78, 255};
-  drawFilledCircle(r, cx, headY, bodyR + 3, bodyOutline);
-  drawFilledCircle(r, cx, headY, bodyR, bodyColor);
+  // Утолщение на верхушке стебля — опора рычага.
+  drawFilledCircle(r, cx, pivotY, std::max(4, static_cast<int>(off(11))),
+                    SDL_Color{40, 40, 40, 255});
+  drawFilledCircle(r, cx, pivotY, std::max(3, static_cast<int>(off(9))),
+                    SDL_Color{58, 124, 58, 255});
+
+  // Рычаг-лоза: взведён назад-вниз в покое, резко взмахивает
+  // вперёд-вверх в момент броска.
+  float angleDeg = -35.0f + 125.0f * launchPulse;
+  float rad = angleDeg * 3.14159265f / 180.0f;
+  float armLen = off(32);
+  float dirX = std::cos(rad);
+  float dirY = -std::sin(rad);
+  float tipX = cx + dirX * armLen;
+  float tipY = pivotY + dirY * armLen;
+  float perpX = -dirY;
+  float perpY = dirX;
+  float halfW = off(3.5f);
+
+  SDL_Color armOutline{60, 40, 20, 255};
+  SDL_Color armColor{120, 82, 40, 255};
+  drawFilledPolygon(r,
+                     {{cx + perpX * (halfW + 1), float(pivotY) + perpY * (halfW + 1)},
+                      {tipX + perpX * (halfW + 1), tipY + perpY * (halfW + 1)},
+                      {tipX - perpX * (halfW + 1), tipY - perpY * (halfW + 1)},
+                      {cx - perpX * (halfW + 1), float(pivotY) - perpY * (halfW + 1)}},
+                     armOutline);
+  drawFilledPolygon(r,
+                     {{cx + perpX * halfW, float(pivotY) + perpY * halfW},
+                      {tipX + perpX * halfW, tipY + perpY * halfW},
+                      {tipX - perpX * halfW, tipY - perpY * halfW},
+                      {cx - perpX * halfW, float(pivotY) - perpY * halfW}},
+                     armColor);
+
+  // Бутон-праща на конце рычага.
+  int budR = std::max(3, static_cast<int>(off(8)));
+  drawFilledCircle(r, static_cast<int>(tipX), static_cast<int>(tipY), budR + 2,
+                    SDL_Color{60, 40, 20, 255});
+  drawFilledCircle(r, static_cast<int>(tipX), static_cast<int>(tipY), budR,
+                    SDL_Color{180, 70, 60, 255});
 
   int eyeR = std::max(1, static_cast<int>(off(3)));
-  drawFilledCircle(r, cx - static_cast<int>(off(10)), headY - static_cast<int>(off(13)),
+  drawFilledCircle(r, cx - static_cast<int>(off(6)), pivotY + static_cast<int>(off(2)),
                     eyeR, SDL_Color{20, 20, 20, 255});
-  drawFilledCircle(r, cx + static_cast<int>(off(10)), headY - static_cast<int>(off(13)),
+  drawFilledCircle(r, cx + static_cast<int>(off(6)), pivotY + static_cast<int>(off(2)),
                     eyeR, SDL_Color{20, 20, 20, 255});
-
-  int mouthY = headY + static_cast<int>(off(2));
-  if (ready) {
-    int mouthW = static_cast<int>(off(30) + off(8) * chompPulse);
-    int mouthH = static_cast<int>(off(16) + off(6) * chompPulse);
-    SDL_Color mouthColor{35, 12, 12, 255};
-    drawRect(r, SDL_Rect{cx - mouthW / 2, mouthY - mouthH / 2, mouthW, mouthH},
-             mouthColor);
-    SDL_Color teeth{255, 255, 255, 255};
-    int toothW = std::max(2, static_cast<int>(off(5)));
-    int toothH = std::max(2, static_cast<int>(off(6)));
-    for (int tx = -mouthW / 2 + toothW; tx <= mouthW / 2 - toothW;
-         tx += toothW + 2) {
-      drawFilledPolygon(
-          r,
-          {{float(cx + tx - toothW / 2), float(mouthY - mouthH / 2)},
-           {float(cx + tx + toothW / 2), float(mouthY - mouthH / 2)},
-           {float(cx + tx), float(mouthY - mouthH / 2 + toothH)}},
-          teeth);
-      drawFilledPolygon(
-          r,
-          {{float(cx + tx - toothW / 2), float(mouthY + mouthH / 2)},
-           {float(cx + tx + toothW / 2), float(mouthY + mouthH / 2)},
-           {float(cx + tx), float(mouthY + mouthH / 2 - toothH)}},
-          teeth);
-    }
-  } else {
-    // Закрытая пасть — довольная улыбка после укуса.
-    drawRect(r, SDL_Rect{cx - 12, mouthY, 24, 2}, SDL_Color{35, 12, 12, 255});
-  }
 }
 
 // Рисует зомби как фигуру (ноги, туловище, руки, голова), а не кружок.
@@ -694,8 +698,8 @@ class Game {
       toggleSelection(PlantType::Sunflower);
       return;
     }
-    if (pointInRect(mx, my, chomperCardRect)) {
-      toggleSelection(PlantType::Chomper);
+    if (pointInRect(mx, my, catapultCardRect)) {
+      toggleSelection(PlantType::Catapult);
       return;
     }
     if (pointInRect(mx, my, shovelRect)) {
@@ -785,17 +789,20 @@ class Game {
                 FallingSeed{cx, cy, cy, def.produceAmount, false, now});
             plant.lastActionMs = now;
           }
-        } else if (plant.type == PlantType::Chomper) {
-          // Уникальная фишка: не стреляет, а мгновенно съедает зомби,
-          // вплотную подошедшего к нему, затем долго переваривает.
+        } else if (plant.type == PlantType::Catapult) {
+          // Уникальная фишка: раз в actionRateMs хватает ближайшего
+          // зомби в ряду и зашвыривает его обратно к правому краю поля.
           if (now - plant.lastActionMs > def.actionRateMs) {
+            Zombie* nearest = nullptr;
             for (auto& z : zombies) {
-              if (z.row == row && z.x > static_cast<float>(col * CELL) &&
-                  (z.x - col * CELL) < CELL * 0.6f) {
-                z.hp = 0;
-                plant.lastActionMs = now;
-                break;
+              if (z.row == row && z.x > static_cast<float>(col * CELL)) {
+                if (!nearest || z.x < nearest->x) nearest = &z;
               }
+            }
+            if (nearest) {
+              nearest->hp -= def.damage;
+              nearest->x = static_cast<float>(FIELD_W + 20);
+              plant.lastActionMs = now;
             }
           }
         }
@@ -943,7 +950,7 @@ class Game {
 
     drawShopCard(r, text, oilCardRect, PlantType::OilShooter, now);
     drawShopCard(r, text, sunCardRect, PlantType::Sunflower, now);
-    drawShopCard(r, text, chomperCardRect, PlantType::Chomper, now);
+    drawShopCard(r, text, catapultCardRect, PlantType::Catapult, now);
 
     {
       SDL_Color bg = shovelSelected ? SDL_Color{255, 210, 63, 255}
@@ -983,13 +990,13 @@ class Game {
           float pop = sinceAction < 400 ? (1.0f - sinceAction / 400.0f) : 0.0f;
           drawSunflower(r, cx, cy, 1.0f, bob, pop);
         } else {
-          const PlantDef& chomperDef = plantDef(PlantType::Chomper);
-          bool ready = now - cell->lastActionMs > chomperDef.actionRateMs;
           float bob = std::sin(now / 320.0) * 2.0f;
           Uint32 sinceAction = now - cell->lastActionMs;
-          float chompPulse =
-              sinceAction < 200 ? (1.0f - sinceAction / 200.0f) : 0.0f;
-          drawChomper(r, cx, cy, 1.0f, ready, bob, chompPulse);
+          float launchPulse =
+              sinceAction < 300
+                  ? std::sin((sinceAction / 300.0f) * 3.14159f)
+                  : 0.0f;
+          drawCatapult(r, cx, cy, 1.0f, bob, launchPulse);
         }
         drawHpBar(r, FIELD_X + col * CELL + 20, FIELD_Y + row * CELL + 6, 50,
                    cell->hp, cell->maxHp);
@@ -1172,7 +1179,7 @@ class Game {
     } else if (type == PlantType::Sunflower) {
       drawSunflower(r, rect.x + rect.w / 2, rect.y + 30, 0.45f);
     } else {
-      drawChomper(r, rect.x + rect.w / 2, rect.y + 30, 0.45f, true);
+      drawCatapult(r, rect.x + rect.w / 2, rect.y + 30, 0.45f);
     }
     text.draw(def.name, rect.x + rect.w / 2, rect.y + 50,
                SDL_Color{20, 40, 60, 255}, true);
