@@ -34,7 +34,7 @@ Uint32 waveBaseInterval(int waveNum) {
 }
 
 enum class PlantType { OilShooter, Sunflower };
-enum class ZombieType { Basic };
+enum class ZombieType { Basic, Conehead };
 
 struct PlantDef {
   std::string name;
@@ -51,7 +51,6 @@ struct ZombieDef {
   float speed;  // px / ms
   int biteDamage;
   Uint32 attackRateMs;
-  SDL_Color color;
 };
 
 const PlantDef& plantDef(PlantType t) {
@@ -60,10 +59,10 @@ const PlantDef& plantDef(PlantType t) {
   return t == PlantType::OilShooter ? oil : sun;
 }
 
-const ZombieDef& zombieDef(ZombieType) {
-  static const ZombieDef basic{"Зомби", 100, 0.0112f, 34, 700,
-                                SDL_Color{110, 130, 100, 255}};
-  return basic;
+const ZombieDef& zombieDef(ZombieType t) {
+  static const ZombieDef basic{"Зомби", 100, 0.0112f, 34, 700};
+  static const ZombieDef conehead{"Конусоголовый", 280, 0.0112f, 34, 700};
+  return t == ZombieType::Conehead ? conehead : basic;
 }
 
 struct Plant {
@@ -82,6 +81,8 @@ struct Zombie {
   int hp;
   int maxHp;
   Uint32 lastAttackMs;
+  float animPhase;  // случайный сдвиг фазы шага, чтобы зомби не шагали в такт
+  bool blocked;      // true, если сейчас грызёт растение (не идёт)
 };
 
 struct Projectile {
@@ -120,6 +121,14 @@ void drawSeedIcon(SDL_Renderer* r, int cx, int cy, int radius) {
   drawFilledCircle(r, cx, cy, radius - 2, SDL_Color{223, 194, 58, 255});
   drawFilledCircle(r, cx - radius / 4, cy - radius / 4, radius / 3,
                     SDL_Color{255, 245, 190, 255});
+}
+
+SDL_Color lerpColor(SDL_Color a, SDL_Color b, float t) {
+  t = std::clamp(t, 0.0f, 1.0f);
+  return SDL_Color{
+      static_cast<Uint8>(a.r + (b.r - a.r) * t),
+      static_cast<Uint8>(a.g + (b.g - a.g) * t),
+      static_cast<Uint8>(a.b + (b.b - a.b) * t), 255};
 }
 
 void drawRect(SDL_Renderer* r, SDL_Rect rect, SDL_Color c, bool filled = true) {
@@ -254,10 +263,15 @@ void drawOilShooter(SDL_Renderer* r, int cx, int cyCenter, float scale,
 
 // Рисует Подсолнух как настоящее растение (горшок, стебель, листья и
 // цветок с лепестками вокруг тёмной сердцевины), а не как кружок.
-void drawSunflower(SDL_Renderer* r, int cx, int cyCenter, float scale) {
+// bobOffset — лёгкое покачивание в режиме ожидания; popAmount (0..1) —
+// импульс в момент производства семечки: лепестки распускаются шире и
+// вокруг цветка загорается тёплое свечение.
+void drawSunflower(SDL_Renderer* r, int cx, int cyCenter, float scale,
+                    float bobOffset = 0.0f, float popAmount = 0.0f) {
   auto off = [scale](float v) { return v * scale; };
 
-  int headY = cyCenter - static_cast<int>(off(24));
+  int headY = cyCenter - static_cast<int>(off(24)) -
+              static_cast<int>(bobOffset * scale);
   int potTopY = cyCenter + static_cast<int>(off(16));
   int potBottomY = cyCenter + static_cast<int>(off(34));
 
@@ -271,12 +285,25 @@ void drawSunflower(SDL_Renderer* r, int cx, int cyCenter, float scale) {
 
   drawPlantLeaves(r, cx, potTopY - static_cast<int>(off(4)), scale);
 
-  // Лепестки по кругу вокруг сердцевины.
+  if (popAmount > 0.01f) {
+    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+    Uint8 glowAlpha = static_cast<Uint8>(150 * popAmount);
+    int glowR = static_cast<int>(off(32) + off(14) * popAmount);
+    drawFilledCircle(r, cx, headY, glowR,
+                      SDL_Color{255, 241, 168, glowAlpha});
+    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
+  }
+
+  // Лепестки по кругу вокруг сердцевины — на импульсе распускаются шире
+  // и светлеют.
   const int PETAL_COUNT = 10;
-  float petalOrbit = off(23);
-  int petalR = std::max(3, static_cast<int>(off(11)));
+  float petalGrow = 1.0f + popAmount * 0.3f;
+  float petalOrbit = off(23) * petalGrow;
+  int petalR = std::max(3, static_cast<int>(off(11) * petalGrow));
   SDL_Color petalOutline{150, 90, 10, 255};
-  SDL_Color petalColor{255, 196, 20, 255};
+  SDL_Color petalColor =
+      lerpColor(SDL_Color{255, 196, 20, 255}, SDL_Color{255, 240, 160, 255},
+                popAmount);
   for (int i = 0; i < PETAL_COUNT; ++i) {
     float angle = (6.28318530f * i) / PETAL_COUNT;
     int px = cx + static_cast<int>(std::cos(angle) * petalOrbit);
@@ -295,6 +322,94 @@ void drawSunflower(SDL_Renderer* r, int cx, int cyCenter, float scale) {
                     eyeR, SDL_Color{25, 15, 8, 255});
   drawFilledCircle(r, cx + static_cast<int>(off(6)), headY - static_cast<int>(off(2)),
                     eyeR, SDL_Color{25, 15, 8, 255});
+}
+
+// Рисует зомби как фигуру (ноги, туловище, руки, голова), а не кружок.
+// walkPhase крутит ноги/руки по циклу ходьбы; blocked останавливает ходьбу
+// (зомби грызёт растение); conehead добавляет дорожный конус на голову.
+void drawZombie(SDL_Renderer* r, int cx, int cyCenter, float walkPhase,
+                 bool blocked, bool conehead) {
+  int headR = 15;
+  int headY = cyCenter - 24;
+  int torsoW = 24;
+  int torsoTop = headY + headR - 2;
+  int torsoH = 26;
+  int torsoBottom = torsoTop + torsoH;
+
+  float stride = blocked ? 0.0f : std::sin(walkPhase) * 5.0f;
+  float armSwing = blocked ? 6.0f : std::sin(walkPhase + 3.14159f) * 4.0f;
+
+  SDL_Color skinColor{140, 158, 118, 255};
+  SDL_Color skinOutline{45, 55, 35, 255};
+  SDL_Color shirtColor{92, 100, 68, 255};
+  SDL_Color shirtOutline{40, 45, 28, 255};
+  SDL_Color pantsColor{64, 68, 56, 255};
+
+  // Ноги — шагают попеременно.
+  int legW = 9, legH = 20;
+  int legY = torsoBottom - 4;
+  drawRect(r, SDL_Rect{cx - 10 + static_cast<int>(stride), legY, legW, legH},
+           pantsColor);
+  drawRect(r, SDL_Rect{cx + 1 - static_cast<int>(stride), legY, legW, legH},
+           pantsColor);
+
+  // Руки — качаются в противофазе к ногам; при атаке вытянуты вперёд.
+  int armW = 7, armH = 22;
+  int armY = torsoTop + 2;
+  drawRect(r,
+           SDL_Rect{cx - torsoW / 2 - armW + 2,
+                    armY + static_cast<int>(blocked ? -4 : armSwing), armW,
+                    armH},
+           skinColor);
+  drawRect(r,
+           SDL_Rect{cx + torsoW / 2 - 2,
+                    armY + static_cast<int>(blocked ? -4 : -armSwing), armW,
+                    armH},
+           skinColor);
+
+  // Рваная рубаха.
+  drawRect(r, SDL_Rect{cx - torsoW / 2 - 1, torsoTop - 1, torsoW + 2,
+                        torsoH + 2},
+           shirtOutline);
+  drawRect(r, SDL_Rect{cx - torsoW / 2, torsoTop, torsoW, torsoH},
+           shirtColor);
+  drawFilledPolygon(
+      r,
+      {{float(cx - torsoW / 2), float(torsoBottom - 6)},
+       {float(cx - torsoW / 2 + 8), float(torsoBottom - 6)},
+       {float(cx - torsoW / 2 + 4), float(torsoBottom + 4)}},
+      shirtOutline);
+
+  // Голова с запавшими глазами.
+  drawFilledCircle(r, cx, headY, headR + 2, skinOutline);
+  drawFilledCircle(r, cx, headY, headR, skinColor);
+  drawFilledCircle(r, cx - 5, headY - 2, 2, SDL_Color{20, 15, 10, 255});
+  drawFilledCircle(r, cx + 5, headY - 2, 2, SDL_Color{20, 15, 10, 255});
+  drawRect(r, SDL_Rect{cx - 5, headY + 6, 10, 2}, SDL_Color{50, 25, 20, 255});
+
+  if (conehead) {
+    SDL_Color coneOutline{130, 65, 8, 255};
+    SDL_Color coneColor{255, 140, 26, 255};
+    int baseY = headY - headR + 5;
+    int topY = headY - headR - 14;
+    drawFilledPolygon(r,
+                       {{float(cx), float(topY) - 2},
+                        {float(cx) + 15, float(baseY) + 2},
+                        {float(cx) - 15, float(baseY) + 2}},
+                       coneOutline);
+    drawFilledPolygon(r,
+                       {{float(cx), float(topY)},
+                        {float(cx) + 12, float(baseY)},
+                        {float(cx) - 12, float(baseY)}},
+                       coneColor);
+    int stripeY = baseY - 7;
+    drawFilledPolygon(r,
+                       {{float(cx) - 9, float(stripeY)},
+                        {float(cx) + 9, float(stripeY)},
+                        {float(cx) + 7, float(stripeY) + 4},
+                        {float(cx) - 7, float(stripeY) + 4}},
+                       SDL_Color{255, 255, 255, 255});
+  }
 }
 
 class TextRenderer {
@@ -349,6 +464,7 @@ class Game {
     betweenWaves = false;
     waveBreakEndTime = 0;
     zombieSpawnIntervalMs = waveBaseInterval(currentWave);
+    buildWavePlan(currentWave);
     seedDropIntervalMs = 8000;
     running = true;
     won = false;
@@ -485,6 +601,7 @@ class Game {
                          : nullptr;
       bool blocked = plant && (it->x - col * CELL) < CELL * 0.6f &&
                      it->x > static_cast<float>(col * CELL);
+      it->blocked = blocked;
 
       if (blocked) {
         if (now - it->lastAttackMs > def.attackRateMs) {
@@ -531,6 +648,7 @@ class Game {
       killsThisWave = 0;
       spawnedThisWave = 0;
       zombieSpawnIntervalMs = waveBaseInterval(currentWave);
+      buildWavePlan(currentWave);
       lastZombieSpawn = now - zombieSpawnIntervalMs - 1;
     }
   }
@@ -587,7 +705,10 @@ class Game {
                              : 0.0f;
           drawOilShooter(r, cx, cy, 1.0f, bob, recoil);
         } else {
-          drawSunflower(r, cx, cy, 1.0f);
+          float bob = std::sin(now / 300.0) * 2.0f;
+          Uint32 sinceAction = now - cell->lastActionMs;
+          float pop = sinceAction < 400 ? (1.0f - sinceAction / 400.0f) : 0.0f;
+          drawSunflower(r, cx, cy, 1.0f, bob, pop);
         }
         drawHpBar(r, FIELD_X + col * CELL + 20, FIELD_Y + row * CELL + 6, 50,
                    cell->hp, cell->maxHp);
@@ -603,11 +724,11 @@ class Game {
 
     // Зомби.
     for (auto& z : zombies) {
-      const ZombieDef& def = zombieDef(z.type);
       int cx = FIELD_X + static_cast<int>(z.x);
       int cy = FIELD_Y + z.row * CELL + CELL / 2;
-      drawFilledCircle(r, cx, cy, 28, def.color);
-      text.draw("З", cx, cy, SDL_Color{20, 20, 20, 255}, true);
+      float walkPhase = z.animPhase + now / 130.0;
+      drawZombie(r, cx, cy, walkPhase, z.blocked,
+                 z.type == ZombieType::Conehead);
       drawHpBar(r, cx - 25, FIELD_Y + z.row * CELL + 6, 50, z.hp, z.maxHp);
     }
 
@@ -698,13 +819,28 @@ class Game {
       selectedPlant = type;
   }
 
+  // Составляет план волны: сколько зомби из неё будут конусоголовыми
+  // (с 3-й волны — 1/2/3 штуки), в случайном порядке появления.
+  void buildWavePlan(int waveNum) {
+    int total = WAVE_ZOMBIE_COUNTS[waveNum - 1];
+    int coneheads = waveNum >= 3 ? std::min(waveNum - 2, total) : 0;
+    waveSpawnPlan.assign(total, ZombieType::Basic);
+    for (int i = 0; i < coneheads; ++i) waveSpawnPlan[i] = ZombieType::Conehead;
+    static std::mt19937 rng{std::random_device{}()};
+    std::shuffle(waveSpawnPlan.begin(), waveSpawnPlan.end(), rng);
+  }
+
   void spawnZombie() {
     static std::mt19937 rng{std::random_device{}()};
     std::uniform_int_distribution<int> rowDist(0, ROWS - 1);
-    const ZombieDef& def = zombieDef(ZombieType::Basic);
-    zombies.push_back(Zombie{ZombieType::Basic, rowDist(rng),
+    std::uniform_real_distribution<float> phaseDist(0.0f, 6.28318530f);
+    ZombieType type = spawnedThisWave < static_cast<int>(waveSpawnPlan.size())
+                          ? waveSpawnPlan[spawnedThisWave]
+                          : ZombieType::Basic;
+    const ZombieDef& def = zombieDef(type);
+    zombies.push_back(Zombie{type, rowDist(rng),
                               static_cast<float>(FIELD_W + 20), def.hp,
-                              def.hp, SDL_GetTicks()});
+                              def.hp, SDL_GetTicks(), phaseDist(rng), false});
   }
 
   void spawnFallingSeedFromSky() {
@@ -758,6 +894,7 @@ class Game {
   int spawnedThisWave = 0;
   bool betweenWaves = false;
   Uint32 waveBreakEndTime = 0;
+  std::vector<ZombieType> waveSpawnPlan;
   Uint32 gameStartTime = 0;
   Uint32 lastZombieSpawn = 0;
   Uint32 zombieSpawnIntervalMs = 8000;
