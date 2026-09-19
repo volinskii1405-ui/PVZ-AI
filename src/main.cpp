@@ -65,8 +65,8 @@ const PlantDef& plantDef(PlantType t) {
 }
 
 const ZombieDef& zombieDef(ZombieType t) {
-  static const ZombieDef basic{"Зомби", 150, 0.0112f, 34, 700};
-  static const ZombieDef conehead{"Конусоголовый", 420, 0.0112f, 34, 700};
+  static const ZombieDef basic{"Зомби", 150, 0.01288f, 34, 700};
+  static const ZombieDef conehead{"Конусоголовый", 420, 0.01288f, 34, 700};
   return t == ZombieType::Conehead ? conehead : basic;
 }
 
@@ -77,6 +77,7 @@ struct Plant {
   int row;
   int col;
   Uint32 lastActionMs;
+  bool lastShotWasOilCube = false;
 };
 
 struct Zombie {
@@ -109,6 +110,7 @@ struct FallingSeed {
 SDL_Rect seedCounterRect{15, 15, 170, 80};
 SDL_Rect oilCardRect{200, 15, 110, 80};
 SDL_Rect sunCardRect{320, 15, 110, 80};
+SDL_Rect shovelRect{440, 15, 90, 80};
 SDL_Rect restartBtnRect{WIN_W / 2 - 90, WIN_H / 2 + 30, 180, 46};
 
 void drawFilledCircle(SDL_Renderer* r, int cx, int cy, int radius,
@@ -146,17 +148,20 @@ void drawRect(SDL_Renderer* r, SDL_Rect rect, SDL_Color c, bool filled = true) {
     SDL_RenderDrawRect(r, &rect);
 }
 
-// Кубик масла — редкий особый снаряд Маслострела и значок замедления над
-// головой зомби, в которого он попал. Рисуется как маленький кубик с более
-// светлой верхней гранью, чтобы явно отличаться от круглой обычной капли.
+// Кубик масла — редкий особый снаряд Маслострела и значок на лице зомби,
+// в которого он попал. Рисуется как кубик с более светлой верхней гранью
+// и бликом, чтобы явно отличаться от круглой обычной капли.
 void drawOilCubeIcon(SDL_Renderer* r, int cx, int cy, int half) {
   SDL_Color outline{120, 90, 20, 255};
   SDL_Color topFace{255, 250, 225, 255};
   SDL_Color frontFace{235, 196, 90, 255};
+  SDL_Color shine{255, 255, 255, 255};
   drawRect(r, SDL_Rect{cx - half - 1, cy - half - 1, half * 2 + 2, half * 2 + 2},
            outline);
   drawRect(r, SDL_Rect{cx - half, cy - half, half * 2, half}, topFace);
   drawRect(r, SDL_Rect{cx - half, cy, half * 2, half}, frontFace);
+  int shineSize = std::max(1, half / 3);
+  drawRect(r, SDL_Rect{cx - half + 2, cy + 2, shineSize, shineSize}, shine);
 }
 
 // Заливка выпуклого многоугольника (веером треугольников).
@@ -223,13 +228,41 @@ void drawPlantLeaves(SDL_Renderer* r, int cx, int leafBaseY, float scale) {
   drawLeaf(1.0f);
 }
 
+// Лопата для выкапывания растений: черенок с ручкой и металлическое лезвие.
+void drawShovelIcon(SDL_Renderer* r, int cx, int cy) {
+  SDL_Color handleOutline{70, 45, 20, 255};
+  SDL_Color handleColor{150, 105, 55, 255};
+  drawFilledCircle(r, cx, cy - 24, 6, handleOutline);
+  drawFilledCircle(r, cx, cy - 24, 4, SDL_Color{180, 130, 70, 255});
+  drawRect(r, SDL_Rect{cx - 4, cy - 22, 8, 26}, handleOutline);
+  drawRect(r, SDL_Rect{cx - 3, cy - 21, 6, 24}, handleColor);
+
+  SDL_Color bladeOutline{70, 72, 78, 255};
+  SDL_Color bladeColor{182, 190, 198, 255};
+  drawFilledPolygon(r,
+                     {{float(cx) - 13, float(cy) + 1},
+                      {float(cx) + 13, float(cy) + 1},
+                      {float(cx) + 9, float(cy) + 22},
+                      {float(cx) - 9, float(cy) + 22}},
+                     bladeOutline);
+  drawFilledPolygon(r,
+                     {{float(cx) - 10, float(cy) + 3},
+                      {float(cx) + 10, float(cy) + 3},
+                      {float(cx) + 7, float(cy) + 19},
+                      {float(cx) - 7, float(cy) + 19}},
+                     bladeColor);
+}
+
 // Рисует Маслострел как настоящее растение (горшок, стебель, листья,
 // голова с лицом и "маслянный" ствол-пушка), а не как кружок.
 // cx/cyCenter — центр клетки; scale уменьшает иконку для карточки магазина;
 // bobOffset — лёгкое покачивание головы (px); recoilAmount (0..1) — отдача
-// при выстреле, тянет голову назад и зажигает вспышку у дула.
+// при выстреле, тянет голову назад и зажигает вспышку у дула. oilCubeShot
+// делает эту отдачу уникальной: голова раздувается сильнее, вспышка — в
+// виде кубика масла, а не круглая.
 void drawOilShooter(SDL_Renderer* r, int cx, int cyCenter, float scale,
-                     float bobOffset = 0.0f, float recoilAmount = 0.0f) {
+                     float bobOffset = 0.0f, float recoilAmount = 0.0f,
+                     bool oilCubeShot = false) {
   auto off = [scale](float v) { return v * scale; };
 
   int headY = cyCenter - static_cast<int>(off(20)) -
@@ -249,28 +282,40 @@ void drawOilShooter(SDL_Renderer* r, int cx, int cyCenter, float scale,
 
   drawPlantLeaves(r, cx, potTopY - static_cast<int>(off(4)), scale);
 
-  int hcx = cx - static_cast<int>(recoilAmount * off(6));
+  float kick = oilCubeShot ? recoilAmount * 1.8f : recoilAmount;
+  int hcx = cx - static_cast<int>(kick * off(6));
+  int puff = oilCubeShot ? static_cast<int>(off(5) * recoilAmount) : 0;
+  int headRAnim = headR + puff;
 
-  drawFilledCircle(r, hcx, headY, headR, SDL_Color{40, 40, 40, 255});
-  drawFilledCircle(r, hcx, headY, std::max(3, headR - 3),
+  drawFilledCircle(r, hcx, headY, headRAnim, SDL_Color{40, 40, 40, 255});
+  drawFilledCircle(r, hcx, headY, std::max(3, headRAnim - 3),
                     SDL_Color{235, 193, 60, 255});
 
   SDL_Color spoutColor{70, 60, 25, 255};
   int spoutW = std::max(4, static_cast<int>(off(20)));
   int spoutH = std::max(3, static_cast<int>(off(14)));
-  int spoutX = hcx + static_cast<int>(off(16));
+  int spoutX = hcx + static_cast<int>(off(16)) + puff;
   drawRect(r, SDL_Rect{spoutX, headY - spoutH / 2, spoutW, spoutH},
            spoutColor);
-  int muzzleX = hcx + static_cast<int>(off(36));
-  drawFilledCircle(r, muzzleX, headY, std::max(2, static_cast<int>(off(7))),
-                    SDL_Color{255, 224, 120, 255});
+  int muzzleX = spoutX + spoutW;
+  int muzzleR = std::max(2, static_cast<int>(off(7)));
+  drawFilledCircle(r, muzzleX, headY, muzzleR,
+                    oilCubeShot ? SDL_Color{255, 250, 225, 255}
+                                : SDL_Color{255, 224, 120, 255});
 
   if (recoilAmount > 0.01f) {
     SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
-    Uint8 flashAlpha = static_cast<Uint8>(220 * recoilAmount);
-    int flashR = std::max(3, static_cast<int>(off(6) + off(10) * recoilAmount));
-    drawFilledCircle(r, muzzleX + static_cast<int>(off(6)), headY, flashR,
-                      SDL_Color{255, 245, 200, flashAlpha});
+    if (oilCubeShot) {
+      int flashHalf =
+          std::max(5, static_cast<int>(off(10) + off(14) * recoilAmount));
+      drawOilCubeIcon(r, muzzleX + static_cast<int>(off(8)), headY, flashHalf);
+    } else {
+      Uint8 flashAlpha = static_cast<Uint8>(220 * recoilAmount);
+      int flashR =
+          std::max(3, static_cast<int>(off(6) + off(10) * recoilAmount));
+      drawFilledCircle(r, muzzleX + static_cast<int>(off(6)), headY, flashR,
+                        SDL_Color{255, 245, 200, flashAlpha});
+    }
     SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
   }
 
@@ -433,7 +478,8 @@ void drawZombie(SDL_Renderer* r, int cx, int cyCenter, float walkPhase,
   }
 
   if (slowed) {
-    drawOilCubeIcon(r, cx + 17, headY - headR - 2, 6);
+    // Кубик масла "прилип" прямо на лицо, а не рядом с полоской здоровья.
+    drawOilCubeIcon(r, cx + 4, headY + 3, 7);
   }
 }
 
@@ -477,6 +523,7 @@ class Game {
   void reset() {
     seeds = 50;
     selectedPlant.reset();
+    shovelSelected = false;
     for (auto& row : grid)
       for (auto& cell : row) cell.reset();
     zombies.clear();
@@ -525,12 +572,27 @@ class Game {
       toggleSelection(PlantType::Sunflower);
       return;
     }
+    if (pointInRect(mx, my, shovelRect)) {
+      selectedPlant.reset();
+      shovelSelected = !shovelSelected;
+      return;
+    }
 
-    if (!selectedPlant.has_value()) return;
     int col = (mx - FIELD_X) / CELL;
     int row = (my - FIELD_Y) / CELL;
-    if (col < 0 || col >= COLS || row < 0 || row >= ROWS) return;
-    if (mx < FIELD_X || my < FIELD_Y) return;
+    bool onField = col >= 0 && col < COLS && row >= 0 && row < ROWS &&
+                   mx >= FIELD_X && my >= FIELD_Y;
+    if (!onField) return;
+
+    if (shovelSelected) {
+      if (grid[row][col].has_value()) {
+        grid[row][col].reset();
+        shovelSelected = false;
+      }
+      return;
+    }
+
+    if (!selectedPlant.has_value()) return;
     if (grid[row][col].has_value()) return;
 
     const PlantDef& def = plantDef(*selectedPlant);
@@ -586,6 +648,7 @@ class Game {
                           : def.damage;
             projectiles.push_back(Projectile{px, py, row, dmg, 0.4f, oilCube});
             plant.lastActionMs = now;
+            plant.lastShotWasOilCube = oilCube;
           }
         } else if (plant.type == PlantType::Sunflower) {
           if (now - plant.lastActionMs > def.actionRateMs) {
@@ -716,6 +779,16 @@ class Game {
     drawShopCard(r, text, oilCardRect, PlantType::OilShooter);
     drawShopCard(r, text, sunCardRect, PlantType::Sunflower);
 
+    {
+      SDL_Color bg = shovelSelected ? SDL_Color{255, 210, 63, 255}
+                                     : SDL_Color{207, 232, 176, 255};
+      drawRect(r, shovelRect, bg);
+      drawRect(r, shovelRect, SDL_Color{74, 122, 42, 255}, false);
+      drawShovelIcon(r, shovelRect.x + shovelRect.w / 2, shovelRect.y + 34);
+      text.draw("Лопата", shovelRect.x + shovelRect.w / 2, shovelRect.y + 60,
+                 SDL_Color{20, 40, 60, 255}, true);
+    }
+
     text.draw("Волна: " + std::to_string(currentWave) + " / " +
                    std::to_string(WAVE_COUNT),
                555, 20, SDL_Color{244, 228, 188, 255});
@@ -736,7 +809,8 @@ class Game {
           float recoil = sinceAction < 140
                              ? (1.0f - sinceAction / 140.0f)
                              : 0.0f;
-          drawOilShooter(r, cx, cy, 1.0f, bob, recoil);
+          drawOilShooter(r, cx, cy, 1.0f, bob, recoil,
+                         cell->lastShotWasOilCube);
         } else {
           float bob = std::sin(now / 300.0) * 2.0f;
           Uint32 sinceAction = now - cell->lastActionMs;
@@ -753,7 +827,7 @@ class Game {
       int px = FIELD_X + static_cast<int>(p.x);
       int py = FIELD_Y + static_cast<int>(p.y);
       if (p.isOilCube) {
-        drawOilCubeIcon(r, px, py, 8);
+        drawOilCubeIcon(r, px, py, 13);
       } else {
         drawFilledCircle(r, px, py, 7, SDL_Color{255, 214, 64, 255});
       }
@@ -803,9 +877,12 @@ class Game {
                    SDL_Color{255, 235, 180, 255}, true);
     }
 
-    // Сетка при выборе растения.
-    if (selectedPlant.has_value()) {
-      SDL_SetRenderDrawColor(r, 255, 255, 255, 90);
+    // Сетка при выборе растения или лопаты (лопата — оранжевая подсветка).
+    if (selectedPlant.has_value() || shovelSelected) {
+      if (shovelSelected)
+        SDL_SetRenderDrawColor(r, 255, 140, 60, 110);
+      else
+        SDL_SetRenderDrawColor(r, 255, 255, 255, 90);
       for (int col = 0; col <= COLS; ++col)
         SDL_RenderDrawLine(r, FIELD_X + col * CELL, FIELD_Y,
                             FIELD_X + col * CELL, FIELD_Y + FIELD_H);
@@ -850,6 +927,7 @@ class Game {
   void toggleSelection(PlantType type) {
     const PlantDef& def = plantDef(type);
     if (seeds < def.cost) return;
+    shovelSelected = false;
     if (selectedPlant.has_value() && *selectedPlant == type)
       selectedPlant.reset();
     else
@@ -921,6 +999,7 @@ class Game {
 
   int seeds = 50;
   std::optional<PlantType> selectedPlant;
+  bool shovelSelected = false;
   std::array<std::array<std::optional<Plant>, COLS>, ROWS> grid;
   std::vector<Zombie> zombies;
   std::vector<Projectile> projectiles;
