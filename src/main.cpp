@@ -38,7 +38,7 @@ Uint32 waveBaseInterval(int waveNum) {
   return std::max<Uint32>(3000, 8000 - static_cast<Uint32>(waveNum - 1) * 1000);
 }
 
-enum class PlantType { OilShooter, Sunflower, Catapult };
+enum class PlantType { OilShooter, Sunflower, Daisy };
 enum class ZombieType { Basic, Conehead, Crazy, Mutant };
 
 struct PlantDef {
@@ -46,8 +46,8 @@ struct PlantDef {
   int cost;
   int hp;
   Uint32 actionRateMs;  // скорострельность/скорость производства/перезарядка
-                         // броска (для Катапульты)
-  int damage;           // урон снаряда/броска
+                         // лазера (для Ромашки)
+  int damage;           // урон снаряда/лазера
   int produceAmount;    // количество семечек за раз (для подсолнуха)
   Uint32 plantCooldownMs;  // время до повторного доступа к посадке в магазине
 };
@@ -63,16 +63,16 @@ struct ZombieDef {
 const PlantDef& plantDef(PlantType t) {
   static const PlantDef oil{"Маслострел", 100, 100, 1950, 20, 0, 8000};
   static const PlantDef sun{"Подсолнух", 50, 80, 12000, 0, 25, 5000};
-  // Катапульта: не наносит урон по чуть-чуть, а раз в actionRateMs
-  // хватает ближайшего зомби в своём ряду и зашвыривает его обратно к
-  // правому краю поля (плюс немного урона от удара) — уникальная фишка,
-  // которой нет в оригинальной PVZ.
-  static const PlantDef catapult{"Катапульта", 150, 90, 9000, 25, 0, 10000};
+  // Ромашка: раз в actionRateMs лепестки резко раскручиваются и она
+  // стреляет лазером по ближайшему зомби в ряду — 30 урона и отталкивает
+  // его на одну клетку назад. Уникальная фишка, которой нет в
+  // оригинальной PVZ.
+  static const PlantDef daisy{"Ромашка", 175, 90, 15000, 30, 0, 10000};
   switch (t) {
     case PlantType::Sunflower:
       return sun;
-    case PlantType::Catapult:
-      return catapult;
+    case PlantType::Daisy:
+      return daisy;
     default:
       return oil;
   }
@@ -135,7 +135,7 @@ struct FallingSeed {
 SDL_Rect seedCounterRect{15, 15, 150, 80};
 SDL_Rect oilCardRect{175, 15, 90, 80};
 SDL_Rect sunCardRect{270, 15, 90, 80};
-SDL_Rect catapultCardRect{365, 15, 90, 80};
+SDL_Rect daisyCardRect{365, 15, 90, 80};
 SDL_Rect shovelRect{460, 15, 80, 80};
 SDL_Rect restartBtnRect{WIN_W / 2 - 90, WIN_H / 2 + 30, 180, 46};
 
@@ -415,77 +415,66 @@ void drawSunflower(SDL_Renderer* r, int cx, int cyCenter, float scale,
                     eyeR, SDL_Color{25, 15, 8, 255});
 }
 
-// Рисует Катапульту — растение с закрученной лозой-рычагом вместо
-// ствола-пушки. Его уникальная фишка (которой нет в оригинальной PVZ):
-// он не ранит зомби понемногу, а раз в actionRateMs хватает ближайшего
-// зомби в ряду и зашвыривает его обратно к началу поля. launchPulse
-// (0..1, короткий всплеск сразу после броска) резко взмахивает рычагом
-// вперёд-вверх; всё остальное время рычаг взведён назад, будто
-// заряжен. bobOffset — лёгкое покачивание.
-void drawCatapult(SDL_Renderer* r, int cx, int cyCenter, float scale,
-                   float bobOffset = 0.0f, float launchPulse = 0.0f) {
+// Рисует Ромашку — растение с белыми лепестками вокруг жёлтой (при
+// выстреле — раскалённой) сердцевины. Её уникальная фишка (которой нет в
+// оригинальной PVZ): раз в actionRateMs лепестки резко раскручиваются и
+// она бьёт лазером по ближайшему зомби в ряду, отталкивая его на одну
+// клетку назад. petalAngle крутит лепестки (быстро сразу после выстрела,
+// с затуханием); glow (0..1) — накал сердцевины в тот же момент.
+// bobOffset — лёгкое покачивание в покое.
+void drawDaisy(SDL_Renderer* r, int cx, int cyCenter, float scale,
+                float bobOffset = 0.0f, float petalAngle = 0.0f,
+                float glow = 0.0f) {
   auto off = [scale](float v) { return v * scale; };
 
-  int pivotY = cyCenter - static_cast<int>(off(20)) -
-               static_cast<int>(bobOffset * scale);
+  int headY = cyCenter - static_cast<int>(off(24)) -
+              static_cast<int>(bobOffset * scale);
   int potTopY = cyCenter + static_cast<int>(off(16));
   int potBottomY = cyCenter + static_cast<int>(off(34));
 
   drawPlantPot(r, cx, potTopY, potBottomY, scale);
 
   SDL_Color stemColor{34, 90, 40, 255};
-  int stemW = std::max(2, static_cast<int>(off(10)));
-  drawRect(r, SDL_Rect{cx - stemW / 2, pivotY, stemW, potTopY - pivotY},
+  int stemW = std::max(2, static_cast<int>(off(9)));
+  int stemTop = headY + static_cast<int>(off(18));
+  drawRect(r, SDL_Rect{cx - stemW / 2, stemTop, stemW, potTopY - stemTop},
            stemColor);
 
   drawPlantLeaves(r, cx, potTopY - static_cast<int>(off(4)), scale);
 
-  // Утолщение на верхушке стебля — опора рычага.
-  drawFilledCircle(r, cx, pivotY, std::max(4, static_cast<int>(off(11))),
-                    SDL_Color{40, 40, 40, 255});
-  drawFilledCircle(r, cx, pivotY, std::max(3, static_cast<int>(off(9))),
-                    SDL_Color{58, 124, 58, 255});
+  // Лепестки — белые, вращаются вокруг сердцевины.
+  const int PETAL_COUNT = 8;
+  float petalOrbit = off(24);
+  int petalR = std::max(3, static_cast<int>(off(10)));
+  SDL_Color petalOutline{195, 195, 175, 255};
+  SDL_Color petalColor{255, 255, 250, 255};
+  for (int i = 0; i < PETAL_COUNT; ++i) {
+    float angle = petalAngle + (6.28318530f * i) / PETAL_COUNT;
+    int px = cx + static_cast<int>(std::cos(angle) * petalOrbit);
+    int py = headY + static_cast<int>(std::sin(angle) * petalOrbit);
+    drawFilledCircle(r, px, py, petalR + 2, petalOutline);
+    drawFilledCircle(r, px, py, petalR, petalColor);
+  }
 
-  // Рычаг-лоза: взведён назад-вниз в покое, резко взмахивает
-  // вперёд-вверх в момент броска.
-  float angleDeg = -35.0f + 125.0f * launchPulse;
-  float rad = angleDeg * 3.14159265f / 180.0f;
-  float armLen = off(32);
-  float dirX = std::cos(rad);
-  float dirY = -std::sin(rad);
-  float tipX = cx + dirX * armLen;
-  float tipY = pivotY + dirY * armLen;
-  float perpX = -dirY;
-  float perpY = dirX;
-  float halfW = off(3.5f);
+  // Сердцевина — накаляется докрасна в момент выстрела.
+  if (glow > 0.05f) {
+    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+    Uint8 glowAlpha = static_cast<Uint8>(160 * glow);
+    int glowR = static_cast<int>(off(20) + off(12) * glow);
+    drawFilledCircle(r, cx, headY, glowR, SDL_Color{255, 110, 60, glowAlpha});
+    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
+  }
+  int centerR = std::max(4, static_cast<int>(off(17)));
+  SDL_Color centerColor =
+      lerpColor(SDL_Color{235, 196, 40, 255}, SDL_Color{255, 90, 40, 255}, glow);
+  drawFilledCircle(r, cx, headY, centerR + 3, SDL_Color{40, 40, 40, 255});
+  drawFilledCircle(r, cx, headY, centerR, centerColor);
 
-  SDL_Color armOutline{60, 40, 20, 255};
-  SDL_Color armColor{120, 82, 40, 255};
-  drawFilledPolygon(r,
-                     {{cx + perpX * (halfW + 1), float(pivotY) + perpY * (halfW + 1)},
-                      {tipX + perpX * (halfW + 1), tipY + perpY * (halfW + 1)},
-                      {tipX - perpX * (halfW + 1), tipY - perpY * (halfW + 1)},
-                      {cx - perpX * (halfW + 1), float(pivotY) - perpY * (halfW + 1)}},
-                     armOutline);
-  drawFilledPolygon(r,
-                     {{cx + perpX * halfW, float(pivotY) + perpY * halfW},
-                      {tipX + perpX * halfW, tipY + perpY * halfW},
-                      {tipX - perpX * halfW, tipY - perpY * halfW},
-                      {cx - perpX * halfW, float(pivotY) - perpY * halfW}},
-                     armColor);
-
-  // Бутон-праща на конце рычага.
-  int budR = std::max(3, static_cast<int>(off(8)));
-  drawFilledCircle(r, static_cast<int>(tipX), static_cast<int>(tipY), budR + 2,
-                    SDL_Color{60, 40, 20, 255});
-  drawFilledCircle(r, static_cast<int>(tipX), static_cast<int>(tipY), budR,
-                    SDL_Color{180, 70, 60, 255});
-
-  int eyeR = std::max(1, static_cast<int>(off(3)));
-  drawFilledCircle(r, cx - static_cast<int>(off(6)), pivotY + static_cast<int>(off(2)),
-                    eyeR, SDL_Color{20, 20, 20, 255});
-  drawFilledCircle(r, cx + static_cast<int>(off(6)), pivotY + static_cast<int>(off(2)),
-                    eyeR, SDL_Color{20, 20, 20, 255});
+  int eyeR = std::max(1, static_cast<int>(off(2)));
+  drawFilledCircle(r, cx - static_cast<int>(off(6)), headY - static_cast<int>(off(2)),
+                    eyeR, SDL_Color{25, 15, 8, 255});
+  drawFilledCircle(r, cx + static_cast<int>(off(6)), headY - static_cast<int>(off(2)),
+                    eyeR, SDL_Color{25, 15, 8, 255});
 }
 
 // Рисует зомби как фигуру (ноги, туловище, руки, голова), а не кружок.
@@ -698,8 +687,8 @@ class Game {
       toggleSelection(PlantType::Sunflower);
       return;
     }
-    if (pointInRect(mx, my, catapultCardRect)) {
-      toggleSelection(PlantType::Catapult);
+    if (pointInRect(mx, my, daisyCardRect)) {
+      toggleSelection(PlantType::Daisy);
       return;
     }
     if (pointInRect(mx, my, shovelRect)) {
@@ -789,10 +778,15 @@ class Game {
                 FallingSeed{cx, cy, cy, def.produceAmount, false, now});
             plant.lastActionMs = now;
           }
-        } else if (plant.type == PlantType::Catapult) {
-          // Уникальная фишка: раз в actionRateMs хватает ближайшего
-          // зомби в ряду и зашвыривает его обратно к правому краю поля.
-          if (now - plant.lastActionMs > def.actionRateMs) {
+        } else if (plant.type == PlantType::Daisy) {
+          // Уникальная фишка: раз в actionRateMs лепестки раскручиваются
+          // и она бьёт лазером по ближайшему зомби в ряду — урон и
+          // отталкивание на одну клетку назад.
+          bool hasTarget = std::any_of(
+              zombies.begin(), zombies.end(), [&](const Zombie& z) {
+                return z.row == row && z.x > static_cast<float>(col * CELL);
+              });
+          if (hasTarget && now - plant.lastActionMs > def.actionRateMs) {
             Zombie* nearest = nullptr;
             for (auto& z : zombies) {
               if (z.row == row && z.x > static_cast<float>(col * CELL)) {
@@ -801,7 +795,8 @@ class Game {
             }
             if (nearest) {
               nearest->hp -= def.damage;
-              nearest->x = static_cast<float>(FIELD_W + 20);
+              nearest->x = std::min(nearest->x + static_cast<float>(CELL),
+                                     static_cast<float>(FIELD_W + 20));
               plant.lastActionMs = now;
             }
           }
@@ -950,7 +945,7 @@ class Game {
 
     drawShopCard(r, text, oilCardRect, PlantType::OilShooter, now);
     drawShopCard(r, text, sunCardRect, PlantType::Sunflower, now);
-    drawShopCard(r, text, catapultCardRect, PlantType::Catapult, now);
+    drawShopCard(r, text, daisyCardRect, PlantType::Daisy, now);
 
     {
       SDL_Color bg = shovelSelected ? SDL_Color{255, 210, 63, 255}
@@ -992,11 +987,23 @@ class Game {
         } else {
           float bob = std::sin(now / 320.0) * 2.0f;
           Uint32 sinceAction = now - cell->lastActionMs;
-          float launchPulse =
-              sinceAction < 300
-                  ? std::sin((sinceAction / 300.0f) * 3.14159f)
-                  : 0.0f;
-          drawCatapult(r, cx, cy, 1.0f, bob, launchPulse);
+          float spinT = std::min(1.0f, sinceAction / 500.0f);
+          float eased = 1.0f - (1.0f - spinT) * (1.0f - spinT);
+          float petalAngle = eased * 3.0f * 6.28318530f;
+          float glow = sinceAction < 500 ? (1.0f - spinT) : 0.0f;
+          drawDaisy(r, cx, cy, 1.0f, bob, petalAngle, glow);
+
+          if (sinceAction < 250) {
+            float beamAlpha = 1.0f - (sinceAction / 250.0f);
+            SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+            Uint8 a = static_cast<Uint8>(220 * beamAlpha);
+            SDL_Rect beam{cx + 10, cy - 3, (FIELD_X + FIELD_W) - (cx + 10), 6};
+            if (beam.w > 0) drawRect(r, beam, SDL_Color{255, 90, 60, a});
+            SDL_Rect beamCore{cx + 10, cy - 1, beam.w, 2};
+            if (beamCore.w > 0)
+              drawRect(r, beamCore, SDL_Color{255, 220, 200, a});
+            SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
+          }
         }
         drawHpBar(r, FIELD_X + col * CELL + 20, FIELD_Y + row * CELL + 6, 50,
                    cell->hp, cell->maxHp);
@@ -1179,7 +1186,7 @@ class Game {
     } else if (type == PlantType::Sunflower) {
       drawSunflower(r, rect.x + rect.w / 2, rect.y + 30, 0.45f);
     } else {
-      drawCatapult(r, rect.x + rect.w / 2, rect.y + 30, 0.45f);
+      drawDaisy(r, rect.x + rect.w / 2, rect.y + 30, 0.45f);
     }
     text.draw(def.name, rect.x + rect.w / 2, rect.y + 50,
                SDL_Color{20, 40, 60, 255}, true);
