@@ -10,6 +10,7 @@
 #include <optional>
 #include <random>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -39,7 +40,7 @@ Uint32 waveBaseInterval(int waveNum) {
 }
 
 enum class PlantType { OilShooter, Sunflower };
-enum class ZombieType { Basic, Conehead };
+enum class ZombieType { Basic, Conehead, Crazy, Mutant };
 
 struct PlantDef {
   std::string name;
@@ -67,7 +68,18 @@ const PlantDef& plantDef(PlantType t) {
 const ZombieDef& zombieDef(ZombieType t) {
   static const ZombieDef basic{"Зомби", 150, 0.01288f, 34, 700};
   static const ZombieDef conehead{"Конусоголовый", 420, 0.01288f, 34, 700};
-  return t == ZombieType::Conehead ? conehead : basic;
+  static const ZombieDef crazy{"Безумный", 75, 0.03864f, 34, 700};
+  static const ZombieDef mutant{"Мутант", 840, 0.01288f, 34, 700};
+  switch (t) {
+    case ZombieType::Conehead:
+      return conehead;
+    case ZombieType::Crazy:
+      return crazy;
+    case ZombieType::Mutant:
+      return mutant;
+    default:
+      return basic;
+  }
 }
 
 struct Plant {
@@ -391,37 +403,51 @@ void drawSunflower(SDL_Renderer* r, int cx, int cyCenter, float scale,
 
 // Рисует зомби как фигуру (ноги, туловище, руки, голова), а не кружок.
 // walkPhase крутит ноги/руки по циклу ходьбы; blocked останавливает ходьбу
-// (зомби грызёт растение); conehead добавляет дорожный конус на голову;
-// slowed рисует кубик масла над головой, пока зомби замедлен попаданием.
+// (зомби грызёт растение); type определяет облик: Conehead — конус на
+// голове, Crazy — красные глаза и более резкий, размашистый бег, Mutant —
+// крупнее и с шрамом-швом на лбу; slowed рисует кубик масла на лице, пока
+// зомби замедлен попаданием.
 void drawZombie(SDL_Renderer* r, int cx, int cyCenter, float walkPhase,
-                 bool blocked, bool conehead, bool slowed) {
-  int headR = 15;
-  int headY = cyCenter - 24;
-  int torsoW = 24;
-  int torsoTop = headY + headR - 2;
-  int torsoH = 26;
+                 bool blocked, ZombieType type, bool slowed) {
+  bool isConehead = type == ZombieType::Conehead;
+  bool isCrazy = type == ZombieType::Crazy;
+  bool isMutant = type == ZombieType::Mutant;
+
+  float scale = isMutant ? 1.3f : 1.0f;
+  auto sc = [scale](float v) { return static_cast<int>(v * scale); };
+
+  int headR = sc(15);
+  int headY = cyCenter - sc(24);
+  int torsoW = sc(24);
+  int torsoTop = headY + headR - sc(2);
+  int torsoH = sc(26);
   int torsoBottom = torsoTop + torsoH;
 
-  float stride = blocked ? 0.0f : std::sin(walkPhase) * 5.0f;
-  float armSwing = blocked ? 6.0f : std::sin(walkPhase + 3.14159f) * 4.0f;
+  float strideAmp = isCrazy ? 8.0f : 5.0f;
+  float armAmp = isCrazy ? 7.0f : 4.0f;
+  float stride = blocked ? 0.0f : std::sin(walkPhase) * strideAmp * scale;
+  float armSwing =
+      blocked ? 6.0f : std::sin(walkPhase + 3.14159f) * armAmp * scale;
 
-  SDL_Color skinColor{140, 158, 118, 255};
-  SDL_Color skinOutline{45, 55, 35, 255};
+  SDL_Color skinColor =
+      isMutant ? SDL_Color{150, 120, 150, 255} : SDL_Color{140, 158, 118, 255};
+  SDL_Color skinOutline =
+      isMutant ? SDL_Color{60, 40, 60, 255} : SDL_Color{45, 55, 35, 255};
   SDL_Color shirtColor{92, 100, 68, 255};
   SDL_Color shirtOutline{40, 45, 28, 255};
   SDL_Color pantsColor{64, 68, 56, 255};
 
-  // Ноги — шагают попеременно.
-  int legW = 9, legH = 20;
-  int legY = torsoBottom - 4;
-  drawRect(r, SDL_Rect{cx - 10 + static_cast<int>(stride), legY, legW, legH},
+  // Ноги — шагают попеременно (у безумного — размашистее).
+  int legW = sc(9), legH = sc(20);
+  int legY = torsoBottom - sc(4);
+  drawRect(r, SDL_Rect{cx - sc(10) + static_cast<int>(stride), legY, legW, legH},
            pantsColor);
-  drawRect(r, SDL_Rect{cx + 1 - static_cast<int>(stride), legY, legW, legH},
+  drawRect(r, SDL_Rect{cx + sc(1) - static_cast<int>(stride), legY, legW, legH},
            pantsColor);
 
   // Руки — качаются в противофазе к ногам; при атаке вытянуты вперёд.
-  int armW = 7, armH = 22;
-  int armY = torsoTop + 2;
+  int armW = sc(7), armH = sc(22);
+  int armY = torsoTop + sc(2);
   drawRect(r,
            SDL_Rect{cx - torsoW / 2 - armW + 2,
                     armY + static_cast<int>(blocked ? -4 : armSwing), armW,
@@ -446,14 +472,26 @@ void drawZombie(SDL_Renderer* r, int cx, int cyCenter, float walkPhase,
        {float(cx - torsoW / 2 + 4), float(torsoBottom + 4)}},
       shirtOutline);
 
-  // Голова с запавшими глазами.
+  // Голова с запавшими глазами (у безумного — красные).
   drawFilledCircle(r, cx, headY, headR + 2, skinOutline);
   drawFilledCircle(r, cx, headY, headR, skinColor);
-  drawFilledCircle(r, cx - 5, headY - 2, 2, SDL_Color{20, 15, 10, 255});
-  drawFilledCircle(r, cx + 5, headY - 2, 2, SDL_Color{20, 15, 10, 255});
-  drawRect(r, SDL_Rect{cx - 5, headY + 6, 10, 2}, SDL_Color{50, 25, 20, 255});
+  SDL_Color eyeColor =
+      isCrazy ? SDL_Color{220, 20, 20, 255} : SDL_Color{20, 15, 10, 255};
+  int eyeR = isCrazy ? 3 : 2;
+  drawFilledCircle(r, cx - sc(5), headY - sc(2), eyeR, eyeColor);
+  drawFilledCircle(r, cx + sc(5), headY - sc(2), eyeR, eyeColor);
+  drawRect(r, SDL_Rect{cx - 5, headY + sc(6), 10, 2}, SDL_Color{50, 25, 20, 255});
 
-  if (conehead) {
+  if (isMutant) {
+    // Шрам-шов на лбу.
+    SDL_Color scarColor{35, 25, 35, 255};
+    int scarY = headY - sc(9);
+    drawRect(r, SDL_Rect{cx - 11, scarY, 22, 2}, scarColor);
+    for (int i = -9; i <= 9; i += 6)
+      drawRect(r, SDL_Rect{cx + i, scarY - 3, 2, 8}, scarColor);
+  }
+
+  if (isConehead) {
     SDL_Color coneOutline{130, 65, 8, 255};
     SDL_Color coneColor{255, 140, 26, 255};
     int baseY = headY - headR + 5;
@@ -681,9 +719,17 @@ class Game {
       }
     }
 
+    // Мутанты при смерти выпускают на свою линию двух безумных; сами новые
+    // зомби добавляются после цикла, чтобы не инвалидировать итератор.
+    std::vector<std::pair<int, float>> mutantSplits;
+
     for (auto it = zombies.begin(); it != zombies.end();) {
       const ZombieDef& def = zombieDef(it->type);
       if (it->hp <= 0) {
+        if (it->type == ZombieType::Mutant) {
+          mutantSplits.push_back({it->row, it->x});
+          mutantSplits.push_back({it->row, it->x});
+        }
         it = zombies.erase(it);
         ++kills;
         ++killsThisWave;
@@ -715,6 +761,17 @@ class Game {
         return;
       }
       ++it;
+    }
+
+    if (!mutantSplits.empty()) {
+      static std::mt19937 rng{std::random_device{}()};
+      std::uniform_real_distribution<float> phaseDist(0.0f, 6.28318530f);
+      const ZombieDef& crazyDef = zombieDef(ZombieType::Crazy);
+      for (auto& [splitRow, splitX] : mutantSplits) {
+        zombies.push_back(Zombie{ZombieType::Crazy, splitRow, splitX,
+                                  crazyDef.hp, crazyDef.hp, SDL_GetTicks(),
+                                  phaseDist(rng), false});
+      }
     }
 
     for (auto it = fallingSeeds.begin(); it != fallingSeeds.end();) {
@@ -833,13 +890,13 @@ class Game {
       }
     }
 
-    // Зомби.
+    // Зомби (у безумного — заметно более частая, дёрганая походка).
     for (auto& z : zombies) {
       int cx = FIELD_X + static_cast<int>(z.x);
       int cy = FIELD_Y + z.row * CELL + CELL / 2;
-      float walkPhase = z.animPhase + now / 130.0;
-      drawZombie(r, cx, cy, walkPhase, z.blocked,
-                 z.type == ZombieType::Conehead, now < z.slowUntil);
+      double phaseSpeed = z.type == ZombieType::Crazy ? 55.0 : 130.0;
+      float walkPhase = z.animPhase + now / phaseSpeed;
+      drawZombie(r, cx, cy, walkPhase, z.blocked, z.type, now < z.slowUntil);
       drawHpBar(r, cx - 25, FIELD_Y + z.row * CELL + 6, 50, z.hp, z.maxHp);
     }
 
@@ -936,11 +993,22 @@ class Game {
 
   // Составляет план волны: сколько зомби из неё будут конусоголовыми
   // (с 3-й волны — 1/2/3 штуки), в случайном порядке появления.
+  // Составляет план волны: сколько зомби из неё будут конусоголовыми
+  // (с 3-й волны — 1/2/3 штуки), безумными (по одному с 2-й волны) и
+  // мутантами (по одному с 4-й волны), в случайном порядке появления.
   void buildWavePlan(int waveNum) {
     int total = WAVE_ZOMBIE_COUNTS[waveNum - 1];
     int coneheads = waveNum >= 3 ? std::min(waveNum - 2, total) : 0;
-    waveSpawnPlan.assign(total, ZombieType::Basic);
-    for (int i = 0; i < coneheads; ++i) waveSpawnPlan[i] = ZombieType::Conehead;
+    int crazies = waveNum >= 2 ? 1 : 0;
+    int mutants = waveNum >= 4 ? 1 : 0;
+    int special = std::min(coneheads + crazies + mutants, total);
+    int basics = total - special;
+
+    waveSpawnPlan.clear();
+    waveSpawnPlan.insert(waveSpawnPlan.end(), basics, ZombieType::Basic);
+    waveSpawnPlan.insert(waveSpawnPlan.end(), coneheads, ZombieType::Conehead);
+    waveSpawnPlan.insert(waveSpawnPlan.end(), crazies, ZombieType::Crazy);
+    waveSpawnPlan.insert(waveSpawnPlan.end(), mutants, ZombieType::Mutant);
     static std::mt19937 rng{std::random_device{}()};
     std::shuffle(waveSpawnPlan.begin(), waveSpawnPlan.end(), rng);
   }
