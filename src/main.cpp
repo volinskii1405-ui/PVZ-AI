@@ -25,6 +25,11 @@ constexpr int WIN_W = FIELD_X * 2 + FIELD_W;
 constexpr int WIN_H = FIELD_Y + FIELD_H + 20;
 constexpr Uint32 PREP_MS = 15000;  // время на подготовку перед первым зомби
 
+constexpr float OIL_CUBE_CHANCE = 0.12f;
+constexpr float OIL_CUBE_DAMAGE_MULT = 1.5f;
+constexpr Uint32 OIL_CUBE_SLOW_MS = 3000;
+constexpr float OIL_CUBE_SLOW_MULT = 0.5f;
+
 constexpr int WAVE_COUNT = 5;
 constexpr int WAVE_ZOMBIE_COUNTS[WAVE_COUNT] = {3, 4, 5, 6, 7};
 constexpr Uint32 WAVE_BREAK_MS = 10000;  // перерыв между волнами
@@ -54,14 +59,14 @@ struct ZombieDef {
 };
 
 const PlantDef& plantDef(PlantType t) {
-  static const PlantDef oil{"Маслострел", 100, 100, 1500, 20, 0};
+  static const PlantDef oil{"Маслострел", 100, 100, 1950, 20, 0};
   static const PlantDef sun{"Подсолнух", 50, 80, 12000, 0, 25};
   return t == PlantType::OilShooter ? oil : sun;
 }
 
 const ZombieDef& zombieDef(ZombieType t) {
-  static const ZombieDef basic{"Зомби", 100, 0.0112f, 34, 700};
-  static const ZombieDef conehead{"Конусоголовый", 280, 0.0112f, 34, 700};
+  static const ZombieDef basic{"Зомби", 150, 0.0112f, 34, 700};
+  static const ZombieDef conehead{"Конусоголовый", 420, 0.0112f, 34, 700};
   return t == ZombieType::Conehead ? conehead : basic;
 }
 
@@ -83,6 +88,7 @@ struct Zombie {
   Uint32 lastAttackMs;
   float animPhase;  // случайный сдвиг фазы шага, чтобы зомби не шагали в такт
   bool blocked;      // true, если сейчас грызёт растение (не идёт)
+  Uint32 slowUntil = 0;  // до этого момента движется в 2 раза медленнее
 };
 
 struct Projectile {
@@ -90,6 +96,7 @@ struct Projectile {
   int row;
   int damage;
   float speed;
+  bool isOilCube;  // редкий особый выстрел: больше урона и замедляет зомби
 };
 
 struct FallingSeed {
@@ -137,6 +144,19 @@ void drawRect(SDL_Renderer* r, SDL_Rect rect, SDL_Color c, bool filled = true) {
     SDL_RenderFillRect(r, &rect);
   else
     SDL_RenderDrawRect(r, &rect);
+}
+
+// Кубик масла — редкий особый снаряд Маслострела и значок замедления над
+// головой зомби, в которого он попал. Рисуется как маленький кубик с более
+// светлой верхней гранью, чтобы явно отличаться от круглой обычной капли.
+void drawOilCubeIcon(SDL_Renderer* r, int cx, int cy, int half) {
+  SDL_Color outline{120, 90, 20, 255};
+  SDL_Color topFace{255, 250, 225, 255};
+  SDL_Color frontFace{235, 196, 90, 255};
+  drawRect(r, SDL_Rect{cx - half - 1, cy - half - 1, half * 2 + 2, half * 2 + 2},
+           outline);
+  drawRect(r, SDL_Rect{cx - half, cy - half, half * 2, half}, topFace);
+  drawRect(r, SDL_Rect{cx - half, cy, half * 2, half}, frontFace);
 }
 
 // Заливка выпуклого многоугольника (веером треугольников).
@@ -326,9 +346,10 @@ void drawSunflower(SDL_Renderer* r, int cx, int cyCenter, float scale,
 
 // Рисует зомби как фигуру (ноги, туловище, руки, голова), а не кружок.
 // walkPhase крутит ноги/руки по циклу ходьбы; blocked останавливает ходьбу
-// (зомби грызёт растение); conehead добавляет дорожный конус на голову.
+// (зомби грызёт растение); conehead добавляет дорожный конус на голову;
+// slowed рисует кубик масла над головой, пока зомби замедлен попаданием.
 void drawZombie(SDL_Renderer* r, int cx, int cyCenter, float walkPhase,
-                 bool blocked, bool conehead) {
+                 bool blocked, bool conehead, bool slowed) {
   int headR = 15;
   int headY = cyCenter - 24;
   int torsoW = 24;
@@ -409,6 +430,10 @@ void drawZombie(SDL_Renderer* r, int cx, int cyCenter, float walkPhase,
                         {float(cx) + 7, float(stripeY) + 4},
                         {float(cx) - 7, float(stripeY) + 4}},
                        SDL_Color{255, 255, 255, 255});
+  }
+
+  if (slowed) {
+    drawOilCubeIcon(r, cx + 17, headY - headR - 2, 6);
   }
 }
 
@@ -553,7 +578,13 @@ class Game {
             // на off(20) вверх, дуло выступает на off(36) вправо от головы).
             float py = row * CELL + CELL / 2.0f - 20.0f;
             float px = col * CELL + CELL / 2.0f + 36.0f;
-            projectiles.push_back(Projectile{px, py, row, def.damage, 0.4f});
+            static std::mt19937 fireRng{std::random_device{}()};
+            static std::uniform_real_distribution<float> chance01(0.0f, 1.0f);
+            bool oilCube = chance01(fireRng) < OIL_CUBE_CHANCE;
+            int dmg = oilCube
+                          ? static_cast<int>(def.damage * OIL_CUBE_DAMAGE_MULT)
+                          : def.damage;
+            projectiles.push_back(Projectile{px, py, row, dmg, 0.4f, oilCube});
             plant.lastActionMs = now;
           }
         } else if (plant.type == PlantType::Sunflower) {
@@ -575,6 +606,7 @@ class Game {
         if (z.row != it->row) continue;
         if (std::fabs(z.x - it->x) < 26.0f) {
           z.hp -= it->damage;
+          if (it->isOilCube) z.slowUntil = now + OIL_CUBE_SLOW_MS;
           hit = true;
           break;
         }
@@ -610,7 +642,8 @@ class Game {
           if (plant->hp <= 0) grid[it->row][col].reset();
         }
       } else {
-        it->x -= def.speed * static_cast<float>(dt);
+        float speedMult = now < it->slowUntil ? OIL_CUBE_SLOW_MULT : 1.0f;
+        it->x -= def.speed * speedMult * static_cast<float>(dt);
       }
 
       if (it->x <= -10.0f) {
@@ -715,11 +748,15 @@ class Game {
       }
     }
 
-    // Снаряды.
+    // Снаряды — обычная капля кружком, редкий кубик масла отдельным значком.
     for (auto& p : projectiles) {
-      drawFilledCircle(r, FIELD_X + static_cast<int>(p.x),
-                        FIELD_Y + static_cast<int>(p.y), 7,
-                        SDL_Color{255, 214, 64, 255});
+      int px = FIELD_X + static_cast<int>(p.x);
+      int py = FIELD_Y + static_cast<int>(p.y);
+      if (p.isOilCube) {
+        drawOilCubeIcon(r, px, py, 8);
+      } else {
+        drawFilledCircle(r, px, py, 7, SDL_Color{255, 214, 64, 255});
+      }
     }
 
     // Зомби.
@@ -728,7 +765,7 @@ class Game {
       int cy = FIELD_Y + z.row * CELL + CELL / 2;
       float walkPhase = z.animPhase + now / 130.0;
       drawZombie(r, cx, cy, walkPhase, z.blocked,
-                 z.type == ZombieType::Conehead);
+                 z.type == ZombieType::Conehead, now < z.slowUntil);
       drawHpBar(r, cx - 25, FIELD_Y + z.row * CELL + 6, 50, z.hp, z.maxHp);
     }
 
