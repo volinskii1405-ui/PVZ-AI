@@ -25,6 +25,12 @@ constexpr int WIN_W = FIELD_X * 2 + FIELD_W;
 constexpr int WIN_H = FIELD_Y + FIELD_H + 20;
 constexpr Uint32 PREP_MS = 15000;  // время на подготовку перед первым зомби
 
+// Запас времени, на который "откручен назад" lastActionMs у только что
+// посаженного растения, чтобы при посадке не проигрывалась анимация
+// действия (отдача/раскрутка/бутон), как будто оно только что
+// выстрелило. Должен превышать самое длинное окно такой анимации.
+constexpr Uint32 PLANT_PLACE_ANIM_GRACE_MS = 1000;
+
 constexpr float OIL_CUBE_CHANCE = 0.12f;
 constexpr float OIL_CUBE_DAMAGE_MULT = 1.5f;
 constexpr Uint32 OIL_CUBE_SLOW_MS = 3000;
@@ -63,11 +69,11 @@ struct ZombieDef {
 const PlantDef& plantDef(PlantType t) {
   static const PlantDef oil{"Маслострел", 100, 100, 1950, 20, 0, 8000};
   static const PlantDef sun{"Подсолнух", 50, 80, 12000, 0, 25, 5000};
-  // Ромашка: раз в actionRateMs лепестки резко раскручиваются и она
-  // стреляет лазером по ближайшему зомби в ряду — 30 урона и отталкивает
-  // его на одну клетку назад. Уникальная фишка, которой нет в
+  // Ромашка: раз в actionRateMs лепестки резко раскручиваются и она бьёт
+  // лазером сразу по всей линии — каждый зомби в ряду получает 30 урона и
+  // отталкивается на одну клетку назад. Уникальная фишка, которой нет в
   // оригинальной PVZ.
-  static const PlantDef daisy{"Ромашка", 175, 90, 15000, 30, 0, 10000};
+  static const PlantDef daisy{"Ромашка", 225, 90, 15000, 30, 0, 10000};
   switch (t) {
     case PlantType::Sunflower:
       return sun;
@@ -556,7 +562,24 @@ void drawZombie(SDL_Renderer* r, int cx, int cyCenter, float walkPhase,
   int eyeR = isCrazy ? 3 : 2;
   drawFilledCircle(r, cx - sc(5), headY - sc(2), eyeR, eyeColor);
   drawFilledCircle(r, cx + sc(5), headY - sc(2), eyeR, eyeColor);
-  drawRect(r, SDL_Rect{cx - 5, headY + sc(6), 10, 2}, SDL_Color{50, 25, 20, 255});
+
+  // Рот: во время атаки растения — жующий (открывается-закрывается),
+  // иначе просто тонкая полоса.
+  int mouthY = headY + sc(6);
+  if (blocked) {
+    float chew = std::fabs(std::sin(walkPhase * 3.0f));
+    int mouthH = std::max(2, static_cast<int>((2 + chew * 6) * scale));
+    drawRect(r, SDL_Rect{cx - 5, mouthY - mouthH / 2, 10, mouthH},
+             SDL_Color{35, 12, 10, 255});
+    if (chew > 0.5f) {
+      drawRect(r, SDL_Rect{cx - 4, mouthY - mouthH / 2, 3, 2},
+               SDL_Color{235, 230, 215, 255});
+      drawRect(r, SDL_Rect{cx + 1, mouthY - mouthH / 2, 3, 2},
+               SDL_Color{235, 230, 215, 255});
+    }
+  } else {
+    drawRect(r, SDL_Rect{cx - 5, mouthY, 10, 2}, SDL_Color{50, 25, 20, 255});
+  }
 
   if (isMutant) {
     // Шрам-шов на лбу.
@@ -719,7 +742,10 @@ class Game {
 
     seeds -= def.cost;
     Uint32 placedAt = SDL_GetTicks();
-    grid[row][col] = Plant{*selectedPlant, def.hp, def.hp, row, col, placedAt};
+    // lastActionMs "откручен назад", чтобы посадка не выглядела как
+    // только что состоявшийся выстрел/укол/раскрутка растения.
+    grid[row][col] = Plant{*selectedPlant, def.hp, def.hp, row, col,
+                            placedAt - PLANT_PLACE_ANIM_GRACE_MS};
     plantReadyAt[static_cast<int>(*selectedPlant)] = placedAt + def.plantCooldownMs;
     selectedPlant.reset();
   }
@@ -780,25 +806,21 @@ class Game {
           }
         } else if (plant.type == PlantType::Daisy) {
           // Уникальная фишка: раз в actionRateMs лепестки раскручиваются
-          // и она бьёт лазером по ближайшему зомби в ряду — урон и
-          // отталкивание на одну клетку назад.
+          // и она бьёт лазером сразу по всей линии — сплеш на всех
+          // зомби в ряду разом (урон + отталкивание на одну клетку).
           bool hasTarget = std::any_of(
               zombies.begin(), zombies.end(), [&](const Zombie& z) {
                 return z.row == row && z.x > static_cast<float>(col * CELL);
               });
           if (hasTarget && now - plant.lastActionMs > def.actionRateMs) {
-            Zombie* nearest = nullptr;
             for (auto& z : zombies) {
               if (z.row == row && z.x > static_cast<float>(col * CELL)) {
-                if (!nearest || z.x < nearest->x) nearest = &z;
+                z.hp -= def.damage;
+                z.x = std::min(z.x + static_cast<float>(CELL),
+                                static_cast<float>(FIELD_W + 20));
               }
             }
-            if (nearest) {
-              nearest->hp -= def.damage;
-              nearest->x = std::min(nearest->x + static_cast<float>(CELL),
-                                     static_cast<float>(FIELD_W + 20));
-              plant.lastActionMs = now;
-            }
+            plant.lastActionMs = now;
           }
         }
       }
