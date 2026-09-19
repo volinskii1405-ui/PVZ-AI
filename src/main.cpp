@@ -10,7 +10,6 @@
 #include <optional>
 #include <random>
 #include <string>
-#include <utility>
 #include <vector>
 
 namespace {
@@ -39,16 +38,18 @@ Uint32 waveBaseInterval(int waveNum) {
   return std::max<Uint32>(3000, 8000 - static_cast<Uint32>(waveNum - 1) * 1000);
 }
 
-enum class PlantType { OilShooter, Sunflower };
+enum class PlantType { OilShooter, Sunflower, Chomper };
 enum class ZombieType { Basic, Conehead, Crazy, Mutant };
 
 struct PlantDef {
   std::string name;
   int cost;
   int hp;
-  Uint32 actionRateMs;  // скорострельность или скорость производства
+  Uint32 actionRateMs;  // скорострельность/скорость производства/перезарядка
+                         // укуса (для Кусача)
   int damage;           // урон снаряда (для стрелка)
   int produceAmount;    // количество семечек за раз (для подсолнуха)
+  Uint32 plantCooldownMs;  // время до повторного доступа к посадке в магазине
 };
 
 struct ZombieDef {
@@ -60,15 +61,26 @@ struct ZombieDef {
 };
 
 const PlantDef& plantDef(PlantType t) {
-  static const PlantDef oil{"Маслострел", 100, 100, 1950, 20, 0};
-  static const PlantDef sun{"Подсолнух", 50, 80, 12000, 0, 25};
-  return t == PlantType::OilShooter ? oil : sun;
+  static const PlantDef oil{"Маслострел", 100, 100, 1950, 20, 0, 8000};
+  static const PlantDef sun{"Подсолнух", 50, 80, 12000, 0, 25, 5000};
+  // Кусач: вместо стрельбы мгновенно съедает зомби, вплотную подошедшего к
+  // нему, но после этого долго "переваривает" (actionRateMs — перезарядка
+  // укуса), пока уязвим как обычное растение.
+  static const PlantDef chomper{"Кусач", 175, 120, 16000, 0, 0, 12000};
+  switch (t) {
+    case PlantType::Sunflower:
+      return sun;
+    case PlantType::Chomper:
+      return chomper;
+    default:
+      return oil;
+  }
 }
 
 const ZombieDef& zombieDef(ZombieType t) {
   static const ZombieDef basic{"Зомби", 150, 0.01288f, 34, 700};
   static const ZombieDef conehead{"Конусоголовый", 420, 0.01288f, 34, 700};
-  static const ZombieDef crazy{"Безумный", 75, 0.03864f, 34, 700};
+  static const ZombieDef crazy{"Безумный", 113, 0.03864f, 34, 700};
   static const ZombieDef mutant{"Мутант", 840, 0.01288f, 34, 700};
   switch (t) {
     case ZombieType::Conehead:
@@ -119,10 +131,11 @@ struct FallingSeed {
   Uint32 bornAt;
 };
 
-SDL_Rect seedCounterRect{15, 15, 170, 80};
-SDL_Rect oilCardRect{200, 15, 110, 80};
-SDL_Rect sunCardRect{320, 15, 110, 80};
-SDL_Rect shovelRect{440, 15, 90, 80};
+SDL_Rect seedCounterRect{15, 15, 150, 80};
+SDL_Rect oilCardRect{175, 15, 90, 80};
+SDL_Rect sunCardRect{270, 15, 90, 80};
+SDL_Rect chomperCardRect{365, 15, 90, 80};
+SDL_Rect shovelRect{460, 15, 80, 80};
 SDL_Rect restartBtnRect{WIN_W / 2 - 90, WIN_H / 2 + 30, 180, 46};
 
 void drawFilledCircle(SDL_Renderer* r, int cx, int cy, int radius,
@@ -401,6 +414,76 @@ void drawSunflower(SDL_Renderer* r, int cx, int cyCenter, float scale,
                     eyeR, SDL_Color{25, 15, 8, 255});
 }
 
+// Рисует Кусача — растение-ловушку с большой пастью вместо ствола-пушки.
+// Его уникальная фишка: он не стреляет, а мгновенно съедает зомби, вплотную
+// подошедшего к нему, но затем долго "переваривает" (пока digesting=true).
+// ready=true — пасть открыта с зубами, готов кусать; digesting=false —
+// закрытая довольная улыбка и раздутое тело. bobOffset — покачивание;
+// chompPulse (0..1) — короткий рывок пасти в момент укуса.
+void drawChomper(SDL_Renderer* r, int cx, int cyCenter, float scale,
+                  bool ready, float bobOffset = 0.0f, float chompPulse = 0.0f) {
+  auto off = [scale](float v) { return v * scale; };
+
+  int headY = cyCenter - static_cast<int>(off(18)) -
+              static_cast<int>(bobOffset * scale);
+  int potTopY = cyCenter + static_cast<int>(off(16));
+  int potBottomY = cyCenter + static_cast<int>(off(34));
+
+  drawPlantPot(r, cx, potTopY, potBottomY, scale);
+
+  SDL_Color stemColor{34, 90, 40, 255};
+  int stemW = std::max(2, static_cast<int>(off(9)));
+  int stemTop = headY + static_cast<int>(off(20));
+  drawRect(r, SDL_Rect{cx - stemW / 2, stemTop, stemW, potTopY - stemTop},
+           stemColor);
+
+  drawPlantLeaves(r, cx, potTopY - static_cast<int>(off(4)), scale);
+
+  // Раздутое тело, когда переваривает предыдущий укус.
+  int bodyR = std::max(6, static_cast<int>(off(28) + (ready ? 0.0f : off(4))));
+  SDL_Color bodyOutline{20, 70, 25, 255};
+  SDL_Color bodyColor =
+      ready ? SDL_Color{58, 150, 66, 255} : SDL_Color{80, 140, 78, 255};
+  drawFilledCircle(r, cx, headY, bodyR + 3, bodyOutline);
+  drawFilledCircle(r, cx, headY, bodyR, bodyColor);
+
+  int eyeR = std::max(1, static_cast<int>(off(3)));
+  drawFilledCircle(r, cx - static_cast<int>(off(10)), headY - static_cast<int>(off(13)),
+                    eyeR, SDL_Color{20, 20, 20, 255});
+  drawFilledCircle(r, cx + static_cast<int>(off(10)), headY - static_cast<int>(off(13)),
+                    eyeR, SDL_Color{20, 20, 20, 255});
+
+  int mouthY = headY + static_cast<int>(off(2));
+  if (ready) {
+    int mouthW = static_cast<int>(off(30) + off(8) * chompPulse);
+    int mouthH = static_cast<int>(off(16) + off(6) * chompPulse);
+    SDL_Color mouthColor{35, 12, 12, 255};
+    drawRect(r, SDL_Rect{cx - mouthW / 2, mouthY - mouthH / 2, mouthW, mouthH},
+             mouthColor);
+    SDL_Color teeth{255, 255, 255, 255};
+    int toothW = std::max(2, static_cast<int>(off(5)));
+    int toothH = std::max(2, static_cast<int>(off(6)));
+    for (int tx = -mouthW / 2 + toothW; tx <= mouthW / 2 - toothW;
+         tx += toothW + 2) {
+      drawFilledPolygon(
+          r,
+          {{float(cx + tx - toothW / 2), float(mouthY - mouthH / 2)},
+           {float(cx + tx + toothW / 2), float(mouthY - mouthH / 2)},
+           {float(cx + tx), float(mouthY - mouthH / 2 + toothH)}},
+          teeth);
+      drawFilledPolygon(
+          r,
+          {{float(cx + tx - toothW / 2), float(mouthY + mouthH / 2)},
+           {float(cx + tx + toothW / 2), float(mouthY + mouthH / 2)},
+           {float(cx + tx), float(mouthY + mouthH / 2 - toothH)}},
+          teeth);
+    }
+  } else {
+    // Закрытая пасть — довольная улыбка после укуса.
+    drawRect(r, SDL_Rect{cx - 12, mouthY, 24, 2}, SDL_Color{35, 12, 12, 255});
+  }
+}
+
 // Рисует зомби как фигуру (ноги, туловище, руки, голова), а не кружок.
 // walkPhase крутит ноги/руки по циклу ходьбы; blocked останавливает ходьбу
 // (зомби грызёт растение); type определяет облик: Conehead — конус на
@@ -562,6 +645,7 @@ class Game {
     seeds = 50;
     selectedPlant.reset();
     shovelSelected = false;
+    plantReadyAt.fill(0);
     for (auto& row : grid)
       for (auto& cell : row) cell.reset();
     zombies.clear();
@@ -610,6 +694,10 @@ class Game {
       toggleSelection(PlantType::Sunflower);
       return;
     }
+    if (pointInRect(mx, my, chomperCardRect)) {
+      toggleSelection(PlantType::Chomper);
+      return;
+    }
     if (pointInRect(mx, my, shovelRect)) {
       selectedPlant.reset();
       shovelSelected = !shovelSelected;
@@ -637,8 +725,9 @@ class Game {
     if (seeds < def.cost) return;
 
     seeds -= def.cost;
-    grid[row][col] = Plant{*selectedPlant, def.hp, def.hp, row, col,
-                            SDL_GetTicks()};
+    Uint32 placedAt = SDL_GetTicks();
+    grid[row][col] = Plant{*selectedPlant, def.hp, def.hp, row, col, placedAt};
+    plantReadyAt[static_cast<int>(*selectedPlant)] = placedAt + def.plantCooldownMs;
     selectedPlant.reset();
   }
 
@@ -696,6 +785,19 @@ class Game {
                 FallingSeed{cx, cy, cy, def.produceAmount, false, now});
             plant.lastActionMs = now;
           }
+        } else if (plant.type == PlantType::Chomper) {
+          // Уникальная фишка: не стреляет, а мгновенно съедает зомби,
+          // вплотную подошедшего к нему, затем долго переваривает.
+          if (now - plant.lastActionMs > def.actionRateMs) {
+            for (auto& z : zombies) {
+              if (z.row == row && z.x > static_cast<float>(col * CELL) &&
+                  (z.x - col * CELL) < CELL * 0.6f) {
+                z.hp = 0;
+                plant.lastActionMs = now;
+                break;
+              }
+            }
+          }
         }
       }
     }
@@ -719,16 +821,16 @@ class Game {
       }
     }
 
-    // Мутанты при смерти выпускают на свою линию двух безумных; сами новые
-    // зомби добавляются после цикла, чтобы не инвалидировать итератор.
-    std::vector<std::pair<int, float>> mutantSplits;
+    // Мутанты при смерти выпускают трёх безумных, каждого на свою линию;
+    // сами новые зомби добавляются после цикла, чтобы не инвалидировать
+    // итератор.
+    std::vector<float> mutantDeathXs;
 
     for (auto it = zombies.begin(); it != zombies.end();) {
       const ZombieDef& def = zombieDef(it->type);
       if (it->hp <= 0) {
         if (it->type == ZombieType::Mutant) {
-          mutantSplits.push_back({it->row, it->x});
-          mutantSplits.push_back({it->row, it->x});
+          mutantDeathXs.push_back(it->x);
         }
         it = zombies.erase(it);
         ++kills;
@@ -763,14 +865,20 @@ class Game {
       ++it;
     }
 
-    if (!mutantSplits.empty()) {
+    if (!mutantDeathXs.empty()) {
       static std::mt19937 rng{std::random_device{}()};
       std::uniform_real_distribution<float> phaseDist(0.0f, 6.28318530f);
       const ZombieDef& crazyDef = zombieDef(ZombieType::Crazy);
-      for (auto& [splitRow, splitX] : mutantSplits) {
-        zombies.push_back(Zombie{ZombieType::Crazy, splitRow, splitX,
-                                  crazyDef.hp, crazyDef.hp, SDL_GetTicks(),
-                                  phaseDist(rng), false});
+      for (float deathX : mutantDeathXs) {
+        std::array<int, ROWS> rows;
+        for (int i = 0; i < ROWS; ++i) rows[i] = i;
+        std::shuffle(rows.begin(), rows.end(), rng);
+        int spawnCount = std::min(3, ROWS);
+        for (int i = 0; i < spawnCount; ++i) {
+          zombies.push_back(Zombie{ZombieType::Crazy, rows[i], deathX,
+                                    crazyDef.hp, crazyDef.hp, SDL_GetTicks(),
+                                    phaseDist(rng), false});
+        }
       }
     }
 
@@ -833,8 +941,9 @@ class Game {
     textMed.draw(std::to_string(seeds), seedCounterRect.x + 48,
                   seedCounterRect.y + 34, SDL_Color{110, 74, 10, 255});
 
-    drawShopCard(r, text, oilCardRect, PlantType::OilShooter);
-    drawShopCard(r, text, sunCardRect, PlantType::Sunflower);
+    drawShopCard(r, text, oilCardRect, PlantType::OilShooter, now);
+    drawShopCard(r, text, sunCardRect, PlantType::Sunflower, now);
+    drawShopCard(r, text, chomperCardRect, PlantType::Chomper, now);
 
     {
       SDL_Color bg = shovelSelected ? SDL_Color{255, 210, 63, 255}
@@ -868,11 +977,19 @@ class Game {
                              : 0.0f;
           drawOilShooter(r, cx, cy, 1.0f, bob, recoil,
                          cell->lastShotWasOilCube);
-        } else {
+        } else if (cell->type == PlantType::Sunflower) {
           float bob = std::sin(now / 300.0) * 2.0f;
           Uint32 sinceAction = now - cell->lastActionMs;
           float pop = sinceAction < 400 ? (1.0f - sinceAction / 400.0f) : 0.0f;
           drawSunflower(r, cx, cy, 1.0f, bob, pop);
+        } else {
+          const PlantDef& chomperDef = plantDef(PlantType::Chomper);
+          bool ready = now - cell->lastActionMs > chomperDef.actionRateMs;
+          float bob = std::sin(now / 320.0) * 2.0f;
+          Uint32 sinceAction = now - cell->lastActionMs;
+          float chompPulse =
+              sinceAction < 200 ? (1.0f - sinceAction / 200.0f) : 0.0f;
+          drawChomper(r, cx, cy, 1.0f, ready, bob, chompPulse);
         }
         drawHpBar(r, FIELD_X + col * CELL + 20, FIELD_Y + row * CELL + 6, 50,
                    cell->hp, cell->maxHp);
@@ -984,6 +1101,7 @@ class Game {
   void toggleSelection(PlantType type) {
     const PlantDef& def = plantDef(type);
     if (seeds < def.cost) return;
+    if (SDL_GetTicks() < plantReadyAt[static_cast<int>(type)]) return;
     shovelSelected = false;
     if (selectedPlant.has_value() && *selectedPlant == type)
       selectedPlant.reset();
@@ -1036,26 +1154,44 @@ class Game {
   }
 
   void drawShopCard(SDL_Renderer* r, TextRenderer& text, SDL_Rect rect,
-                     PlantType type) {
+                     PlantType type, Uint32 now) {
     const PlantDef& def = plantDef(type);
     bool selected = selectedPlant.has_value() && *selectedPlant == type;
     bool affordable = seeds >= def.cost;
+    Uint32 readyAt = plantReadyAt[static_cast<int>(type)];
+    bool onCooldown = now < readyAt;
 
     SDL_Color bg = selected ? SDL_Color{255, 210, 63, 255}
                              : SDL_Color{207, 232, 176, 255};
-    if (!affordable) bg = SDL_Color{160, 160, 160, 255};
+    if (!affordable || onCooldown) bg = SDL_Color{160, 160, 160, 255};
     drawRect(r, rect, bg);
     drawRect(r, rect, SDL_Color{74, 122, 42, 255}, false);
 
     if (type == PlantType::OilShooter) {
       drawOilShooter(r, rect.x + rect.w / 2, rect.y + 28, 0.45f);
-    } else {
+    } else if (type == PlantType::Sunflower) {
       drawSunflower(r, rect.x + rect.w / 2, rect.y + 30, 0.45f);
+    } else {
+      drawChomper(r, rect.x + rect.w / 2, rect.y + 30, 0.45f, true);
     }
     text.draw(def.name, rect.x + rect.w / 2, rect.y + 50,
                SDL_Color{20, 40, 60, 255}, true);
     text.draw(std::to_string(def.cost), rect.x + rect.w / 2, rect.y + 68,
                SDL_Color{122, 74, 0, 255}, true);
+
+    if (onCooldown) {
+      Uint32 remain = readyAt - now;
+      float frac = std::min(
+          1.0f, static_cast<float>(remain) / def.plantCooldownMs);
+      int overlayH = static_cast<int>(rect.h * frac);
+      SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+      drawRect(r, SDL_Rect{rect.x, rect.y, rect.w, overlayH},
+               SDL_Color{20, 25, 15, 170});
+      SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
+      Uint32 sec = (remain + 999) / 1000;
+      text.draw(std::to_string(sec), rect.x + rect.w / 2, rect.y + rect.h / 2 - 8,
+                 SDL_Color{255, 255, 255, 255}, true);
+    }
   }
 
   void drawHpBar(SDL_Renderer* r, int x, int y, int w, int hp, int maxHp) {
@@ -1067,6 +1203,7 @@ class Game {
 
   int seeds = 50;
   std::optional<PlantType> selectedPlant;
+  std::array<Uint32, 3> plantReadyAt{0, 0, 0};
   bool shovelSelected = false;
   std::array<std::array<std::optional<Plant>, COLS>, ROWS> grid;
   std::vector<Zombie> zombies;
