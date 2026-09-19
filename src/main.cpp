@@ -44,7 +44,7 @@ Uint32 waveBaseInterval(int waveNum) {
   return std::max<Uint32>(3000, 8000 - static_cast<Uint32>(waveNum - 1) * 1000);
 }
 
-enum class PlantType { OilShooter, Sunflower, Daisy };
+enum class PlantType { OilShooter, Sunflower, Daisy, Strawberry };
 enum class ZombieType { Basic, Conehead, Crazy, Mutant };
 
 struct PlantDef {
@@ -74,11 +74,17 @@ const PlantDef& plantDef(PlantType t) {
   // отталкивается на одну клетку назад. Уникальная фишка, которой нет в
   // оригинальной PVZ.
   static const PlantDef daisy{"Ромашка", 225, 90, 15000, 30, 0, 10000};
+  // Клубника: урон за выстрел меньше, чем у Маслострела, зато стреляет
+  // намного чаще — итоговый урон в секунду выше (8/0.45с ≈ 17.8 против
+  // 20/1.95с ≈ 10.3 у Маслострела).
+  static const PlantDef strawberry{"Клубника", 150, 90, 450, 8, 0, 8000};
   switch (t) {
     case PlantType::Sunflower:
       return sun;
     case PlantType::Daisy:
       return daisy;
+    case PlantType::Strawberry:
+      return strawberry;
     default:
       return oil;
   }
@@ -128,7 +134,8 @@ struct Projectile {
   int row;
   int damage;
   float speed;
-  bool isOilCube;  // редкий особый выстрел: больше урона и замедляет зомби
+  bool isOilCube;    // редкий особый выстрел: больше урона и замедляет зомби
+  bool isBerrySeed = false;  // семечко Клубники — маленькое и красное
 };
 
 struct FallingSeed {
@@ -138,11 +145,12 @@ struct FallingSeed {
   Uint32 bornAt;
 };
 
-SDL_Rect seedCounterRect{15, 15, 150, 80};
-SDL_Rect oilCardRect{175, 15, 90, 80};
-SDL_Rect sunCardRect{270, 15, 90, 80};
-SDL_Rect daisyCardRect{365, 15, 90, 80};
-SDL_Rect shovelRect{460, 15, 80, 80};
+SDL_Rect seedCounterRect{15, 15, 140, 80};
+SDL_Rect oilCardRect{158, 15, 84, 80};
+SDL_Rect sunCardRect{245, 15, 84, 80};
+SDL_Rect daisyCardRect{332, 15, 84, 80};
+SDL_Rect strawberryCardRect{419, 15, 84, 80};
+SDL_Rect shovelRect{506, 15, 74, 80};
 SDL_Rect restartBtnRect{WIN_W / 2 - 90, WIN_H / 2 + 30, 180, 46};
 
 void drawFilledCircle(SDL_Renderer* r, int cx, int cy, int radius,
@@ -483,6 +491,105 @@ void drawDaisy(SDL_Renderer* r, int cx, int cyCenter, float scale,
                     eyeR, SDL_Color{25, 15, 8, 255});
 }
 
+// Рисует Клубнику — растение-ягоду с коротким раструбом сбоку вместо
+// длинного ствола Маслострела. Стреляет маленькими редкими семечками
+// намного чаще, чем Маслострел, но каждая из них слабее.
+// bobOffset — покачивание; recoilAmount (0..1) — короткая отдача при
+// выстреле (окно короче, чем у Маслострела — стреляет слишком часто для
+// долгой анимации).
+void drawStrawberry(SDL_Renderer* r, int cx, int cyCenter, float scale,
+                     float bobOffset = 0.0f, float recoilAmount = 0.0f) {
+  auto off = [scale](float v) { return v * scale; };
+
+  int headY = cyCenter - static_cast<int>(off(20)) -
+              static_cast<int>(bobOffset * scale);
+  int headR = std::max(4, static_cast<int>(off(20)));
+  int potTopY = cyCenter + static_cast<int>(off(16));
+  int potBottomY = cyCenter + static_cast<int>(off(34));
+
+  drawPlantPot(r, cx, potTopY, potBottomY, scale);
+
+  SDL_Color stemColor{34, 90, 40, 255};
+  int stemW = std::max(2, static_cast<int>(off(10)));
+  int stemTop = headY + static_cast<int>(headR * 0.8f);
+  drawRect(r, SDL_Rect{cx - stemW / 2, stemTop, stemW, potTopY - stemTop},
+           stemColor);
+
+  drawPlantLeaves(r, cx, potTopY - static_cast<int>(off(4)), scale);
+
+  int hcx = cx - static_cast<int>(recoilAmount * off(4));
+  int berryTopY = headY - static_cast<int>(headR * 0.3f);
+  int tipY = headY + static_cast<int>(headR * 1.1f);
+
+  // Тело ягоды — округлое сверху, сужается к кончику снизу.
+  SDL_Color berryOutline{110, 20, 25, 255};
+  SDL_Color berryColor{220, 50, 60, 255};
+  drawFilledCircle(r, hcx, berryTopY, headR + 2, berryOutline);
+  drawFilledPolygon(r,
+                     {{float(hcx - headR - 2), float(berryTopY)},
+                      {float(hcx + headR + 2), float(berryTopY)},
+                      {float(hcx), float(tipY)}},
+                     berryOutline);
+  drawFilledCircle(r, hcx, berryTopY, headR, berryColor);
+  drawFilledPolygon(r,
+                     {{float(hcx - headR + 2), float(berryTopY)},
+                      {float(hcx + headR - 2), float(berryTopY)},
+                      {float(hcx), float(tipY - 3)}},
+                     berryColor);
+
+  // Семечки на поверхности.
+  SDL_Color seedColor{255, 226, 130, 255};
+  const float seedOffsets[5][2] = {
+      {-8, 2}, {8, 2}, {-5, 12}, {5, 12}, {0, -4}};
+  for (auto& s : seedOffsets) {
+    drawFilledCircle(r, hcx + static_cast<int>(s[0] * scale),
+                      berryTopY + static_cast<int>(s[1] * scale),
+                      std::max(1, static_cast<int>(off(1.6f))), seedColor);
+  }
+
+  // Зелёная чашечка-корона сверху.
+  SDL_Color calyxColor{58, 140, 62, 255};
+  int capY = berryTopY - headR;
+  auto leaf = [&](float dx, float dy) {
+    drawFilledPolygon(r,
+                       {{float(hcx) - off(3), float(capY) + off(3)},
+                        {float(hcx) + off(3), float(capY) + off(3)},
+                        {float(hcx) + dx, float(capY) + dy}},
+                       calyxColor);
+  };
+  leaf(-off(11), -off(7));
+  leaf(0.0f, -off(12));
+  leaf(off(11), -off(7));
+  leaf(-off(6), -off(10));
+  leaf(off(6), -off(10));
+
+  // Короткий раструб сбоку — оттуда вылетают семечки.
+  SDL_Color spoutColor{160, 40, 45, 255};
+  int spoutW = std::max(3, static_cast<int>(off(14)));
+  int spoutH = std::max(3, static_cast<int>(off(10)));
+  int spoutX = hcx + headR - 2;
+  drawRect(r, SDL_Rect{spoutX, headY - spoutH / 2, spoutW, spoutH},
+           spoutColor);
+  int muzzleX = spoutX + spoutW;
+  drawFilledCircle(r, muzzleX, headY, std::max(2, static_cast<int>(off(5))),
+                    seedColor);
+
+  if (recoilAmount > 0.01f) {
+    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+    Uint8 flashAlpha = static_cast<Uint8>(200 * recoilAmount);
+    int flashR = std::max(2, static_cast<int>(off(4) + off(5) * recoilAmount));
+    drawFilledCircle(r, muzzleX + static_cast<int>(off(3)), headY, flashR,
+                      SDL_Color{255, 120, 90, flashAlpha});
+    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
+  }
+
+  int eyeR = std::max(1, static_cast<int>(off(2)));
+  drawFilledCircle(r, hcx - static_cast<int>(off(6)), headY, eyeR,
+                    SDL_Color{30, 20, 15, 255});
+  drawFilledCircle(r, hcx + static_cast<int>(off(2)), headY, eyeR,
+                    SDL_Color{30, 20, 15, 255});
+}
+
 // Рисует зомби как фигуру (ноги, туловище, руки, голова), а не кружок.
 // walkPhase крутит ноги/руки по циклу ходьбы; blocked останавливает ходьбу
 // (зомби грызёт растение); type определяет облик: Conehead — конус на
@@ -714,6 +821,10 @@ class Game {
       toggleSelection(PlantType::Daisy);
       return;
     }
+    if (pointInRect(mx, my, strawberryCardRect)) {
+      toggleSelection(PlantType::Strawberry);
+      return;
+    }
     if (pointInRect(mx, my, shovelRect)) {
       selectedPlant.reset();
       shovelSelected = !shovelSelected;
@@ -795,6 +906,20 @@ class Game {
             projectiles.push_back(Projectile{px, py, row, dmg, 0.4f, oilCube});
             plant.lastActionMs = now;
             plant.lastShotWasOilCube = oilCube;
+          }
+        } else if (plant.type == PlantType::Strawberry) {
+          bool hasTarget = std::any_of(
+              zombies.begin(), zombies.end(), [&](const Zombie& z) {
+                return z.row == row && z.x > static_cast<float>(col * CELL);
+              });
+          if (hasTarget && now - plant.lastActionMs > def.actionRateMs) {
+            // Совпадает с положением дула в drawStrawberry (headY смещён
+            // на off(20) вверх, дуло выступает на headR+off(12) вправо).
+            float py = row * CELL + CELL / 2.0f - 20.0f;
+            float px = col * CELL + CELL / 2.0f + 32.0f;
+            projectiles.push_back(
+                Projectile{px, py, row, def.damage, 0.55f, false, true});
+            plant.lastActionMs = now;
           }
         } else if (plant.type == PlantType::Sunflower) {
           if (now - plant.lastActionMs > def.actionRateMs) {
@@ -968,6 +1093,7 @@ class Game {
     drawShopCard(r, text, oilCardRect, PlantType::OilShooter, now);
     drawShopCard(r, text, sunCardRect, PlantType::Sunflower, now);
     drawShopCard(r, text, daisyCardRect, PlantType::Daisy, now);
+    drawShopCard(r, text, strawberryCardRect, PlantType::Strawberry, now);
 
     {
       SDL_Color bg = shovelSelected ? SDL_Color{255, 210, 63, 255}
@@ -981,10 +1107,10 @@ class Game {
 
     text.draw("Волна: " + std::to_string(currentWave) + " / " +
                    std::to_string(WAVE_COUNT),
-               555, 20, SDL_Color{244, 228, 188, 255});
+               600, 20, SDL_Color{244, 228, 188, 255});
     text.draw("Зомби: " + std::to_string(killsThisWave) + " / " +
                    std::to_string(WAVE_ZOMBIE_COUNTS[currentWave - 1]),
-               555, 46, SDL_Color{244, 228, 188, 255});
+               600, 46, SDL_Color{244, 228, 188, 255});
 
     // Растения.
     for (int row = 0; row < ROWS; ++row) {
@@ -1006,7 +1132,7 @@ class Game {
           Uint32 sinceAction = now - cell->lastActionMs;
           float pop = sinceAction < 400 ? (1.0f - sinceAction / 400.0f) : 0.0f;
           drawSunflower(r, cx, cy, 1.0f, bob, pop);
-        } else {
+        } else if (cell->type == PlantType::Daisy) {
           float bob = std::sin(now / 320.0) * 2.0f;
           Uint32 sinceAction = now - cell->lastActionMs;
           float spinT = std::min(1.0f, sinceAction / 500.0f);
@@ -1026,18 +1152,27 @@ class Game {
               drawRect(r, beamCore, SDL_Color{255, 220, 200, a});
             SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
           }
+        } else {
+          float bob = std::sin(now / 260.0) * 2.0f;
+          Uint32 sinceAction = now - cell->lastActionMs;
+          float recoil =
+              sinceAction < 100 ? (1.0f - sinceAction / 100.0f) : 0.0f;
+          drawStrawberry(r, cx, cy, 1.0f, bob, recoil);
         }
         drawHpBar(r, FIELD_X + col * CELL + 20, FIELD_Y + row * CELL + 6, 50,
                    cell->hp, cell->maxHp);
       }
     }
 
-    // Снаряды — обычная капля кружком, редкий кубик масла отдельным значком.
+    // Снаряды — обычная капля кружком, редкий кубик масла отдельным
+    // значком, семечко Клубники — маленькое и красное.
     for (auto& p : projectiles) {
       int px = FIELD_X + static_cast<int>(p.x);
       int py = FIELD_Y + static_cast<int>(p.y);
       if (p.isOilCube) {
         drawOilCubeIcon(r, px, py, 13);
+      } else if (p.isBerrySeed) {
+        drawFilledCircle(r, px, py, 5, SDL_Color{225, 40, 50, 255});
       } else {
         drawFilledCircle(r, px, py, 7, SDL_Color{255, 214, 64, 255});
       }
@@ -1207,8 +1342,10 @@ class Game {
       drawOilShooter(r, rect.x + rect.w / 2, rect.y + 28, 0.45f);
     } else if (type == PlantType::Sunflower) {
       drawSunflower(r, rect.x + rect.w / 2, rect.y + 30, 0.45f);
-    } else {
+    } else if (type == PlantType::Daisy) {
       drawDaisy(r, rect.x + rect.w / 2, rect.y + 30, 0.45f);
+    } else {
+      drawStrawberry(r, rect.x + rect.w / 2, rect.y + 28, 0.45f);
     }
     text.draw(def.name, rect.x + rect.w / 2, rect.y + 50,
                SDL_Color{20, 40, 60, 255}, true);
@@ -1239,7 +1376,7 @@ class Game {
 
   int seeds = 50;
   std::optional<PlantType> selectedPlant;
-  std::array<Uint32, 3> plantReadyAt{0, 0, 0};
+  std::array<Uint32, 4> plantReadyAt{0, 0, 0, 0};
   bool shovelSelected = false;
   std::array<std::array<std::optional<Plant>, COLS>, ROWS> grid;
   std::vector<Zombie> zombies;
