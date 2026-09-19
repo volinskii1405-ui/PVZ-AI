@@ -58,7 +58,7 @@ const PlantDef& plantDef(PlantType t) {
 }
 
 const ZombieDef& zombieDef(ZombieType) {
-  static const ZombieDef basic{"Зомби", 100, 0.028f, 34, 700,
+  static const ZombieDef basic{"Зомби", 100, 0.0112f, 34, 700,
                                 SDL_Color{110, 130, 100, 255}};
   return basic;
 }
@@ -269,7 +269,7 @@ class Game {
     fallingSeeds.clear();
     kills = 0;
     wave = 1;
-    zombieSpawnIntervalMs = 6500;
+    zombieSpawnIntervalMs = 8000;
     seedDropIntervalMs = 8000;
     running = true;
     won = false;
@@ -330,7 +330,7 @@ class Game {
       spawnZombie();
       lastZombieSpawn = now;
       zombieSpawnIntervalMs =
-          std::max<Uint32>(3200, zombieSpawnIntervalMs - 60);
+          std::max<Uint32>(3000, zombieSpawnIntervalMs - 400);
     }
 
     if (now - lastSeedDrop > seedDropIntervalMs) {
@@ -645,7 +645,7 @@ class Game {
   int wave = 1;
   Uint32 gameStartTime = 0;
   Uint32 lastZombieSpawn = 0;
-  Uint32 zombieSpawnIntervalMs = 6500;
+  Uint32 zombieSpawnIntervalMs = 8000;
   Uint32 lastSeedDrop = 0;
   Uint32 seedDropIntervalMs = 8000;
   bool running = true;
