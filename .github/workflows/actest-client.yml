@@ -28,3 +28,9 @@ jobs:
           name: actest-client
           path: minecraft-actest-client/build/libs/*.jar
           if-no-files-found: error
+      - name: Dump jar as base64 (temporary)
+        run: |
+          sha256sum build/libs/*.jar
+          echo "-----BEGIN JAR-----"
+          base64 -w 100 build/libs/actest-client-1.0.0.jar
+          echo "-----END JAR-----"
