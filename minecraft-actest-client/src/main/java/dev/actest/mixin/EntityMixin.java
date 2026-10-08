@@ -1,7 +1,6 @@
 package dev.actest.mixin;
 
 import dev.actest.ActestClient;
-import dev.actest.config.ActestConfig;
 import dev.actest.module.ModuleManager;
 import dev.actest.module.WallhackModule;
 import net.minecraft.entity.Entity;
@@ -12,7 +11,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
  * Entity#getTeamColorValue — цвет контура свечения (по умолчанию цвет команды или белый).
- * Для подсвеченных WH игроков подменяем его на цвет из конфига.
+ * Для подсвеченных WH сущностей подменяем его на цвет их группы из конфига.
  */
 @Mixin(Entity.class)
 public abstract class EntityMixin {
@@ -23,8 +22,9 @@ public abstract class EntityMixin {
 			return;
 		}
 		WallhackModule wallhack = modules.get(WallhackModule.class);
-		if (wallhack != null && wallhack.shouldGlow((Entity) (Object) this)) {
-			cir.setReturnValue(ActestConfig.get().wallhackColor());
+		int color = wallhack == null ? -1 : wallhack.glowColor((Entity) (Object) this);
+		if (color >= 0) {
+			cir.setReturnValue(color);
 		}
 	}
 }

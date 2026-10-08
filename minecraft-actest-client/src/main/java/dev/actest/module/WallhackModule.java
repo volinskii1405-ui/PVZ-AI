@@ -1,6 +1,7 @@
 package dev.actest.module;
 
 import dev.actest.config.ActestConfig;
+import dev.actest.config.ActestConfig.Wallhack.Target;
 import dev.actest.render.Projection;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.font.TextRenderer;
@@ -8,6 +9,8 @@ import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.network.AbstractClientPlayerEntity;
 import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.entity.Entity;
+import net.minecraft.entity.mob.MobEntity;
+import net.minecraft.entity.mob.Monster;
 import net.minecraft.text.MutableText;
 import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
@@ -18,13 +21,14 @@ import org.lwjgl.glfw.GLFW;
 import java.util.Locale;
 
 /**
- * WH / ESP: подсветка других игроков сквозь стены.
+ * WH / ESP: подсветка сущностей сквозь стены. Три группы, у каждой свой
+ * переключатель и цвет: игроки, враждебные мобы, мирные мобы.
  *  - GLOW: ванильный контур, как от эффекта свечения, но только у нас на клиенте
  *    (см. MinecraftClientMixin и EntityMixin). Контур рисуется отдельным проходом
  *    без учёта глубины, поэтому виден сквозь блоки.
  *  - BOX: 2D-рамка вокруг хитбокса, нарисованная в HUD поверх всего мира.
  *  - BOTH: оба варианта.
- * Ник и дистанция рисуются в HUD над хитбоксом в любом режиме.
+ * Имя и дистанция рисуются в HUD над хитбоксом в любом режиме.
  */
 public final class WallhackModule extends AbstractModule {
 	private static final int OUTLINE_BLACK = 0xFF000000;
@@ -36,31 +40,60 @@ public final class WallhackModule extends AbstractModule {
 
 	@Override
 	public String getHudInfo() {
-		return ActestConfig.get().wallhack.mode.name();
+		ActestConfig.Wallhack cfg = ActestConfig.get().wallhack;
+		StringBuilder info = new StringBuilder(cfg.mode.name());
+		if (cfg.players) info.append(" P");
+		if (cfg.hostileMobs) info.append(" H");
+		if (cfg.passiveMobs) info.append(" M");
+		return info.toString();
 	}
 
 	/** Вызывается из MinecraftClientMixin для каждой сущности каждый кадр — должно быть дёшево. */
 	public boolean shouldGlow(Entity entity) {
+		return glowColor(entity) >= 0;
+	}
+
+	/** Цвет контура 0xRRGGBB для сущности или -1, если её не подсвечиваем контуром. */
+	public int glowColor(Entity entity) {
 		if (!isEnabled()) {
-			return false;
+			return -1;
 		}
 		ActestConfig.Wallhack cfg = ActestConfig.get().wallhack;
-		return cfg.mode != ActestConfig.Wallhack.Mode.BOX && isTarget(entity, cfg);
+		if (cfg.mode == ActestConfig.Wallhack.Mode.BOX) {
+			return -1;
+		}
+		Target target = classify(entity, cfg);
+		return target == null ? -1 : cfg.color(target);
 	}
 
 	/**
-	 * Цель — любой живой игрок, кроме нас и наблюдателей, в пределах maxDistance.
-	 * Проверка на AbstractClientPlayerEntity отсекает серверные копии сущностей
-	 * встроенного сервера в одиночной игре (у них класс ServerPlayerEntity).
+	 * К какой группе относится сущность, или null, если её не подсвечиваем.
+	 * Учитываются только сущности клиентского мира: в одиночной игре те же классы
+	 * используются встроенным сервером, и их копии трогать нельзя.
 	 */
-	private static boolean isTarget(Entity entity, ActestConfig.Wallhack cfg) {
+	private static Target classify(Entity entity, ActestConfig.Wallhack cfg) {
 		ClientPlayerEntity self = MinecraftClient.getInstance().player;
-		return self != null
-				&& entity instanceof AbstractClientPlayerEntity other
-				&& other != self
-				&& other.isAlive()
-				&& !other.isSpectator()
-				&& self.squaredDistanceTo(other) <= cfg.maxDistance * cfg.maxDistance;
+		if (self == null || entity == self || !entity.isAlive() || !entity.getWorld().isClient()) {
+			return null;
+		}
+
+		Target target;
+		if (entity instanceof AbstractClientPlayerEntity player) {
+			if (player.isSpectator()) {
+				return null;
+			}
+			target = Target.PLAYERS;
+		} else if (entity instanceof MobEntity) {
+			// Monster — маркер всех враждебных мобов, включая слаймов, гастов, шалкеров и хоглинов
+			target = entity instanceof Monster ? Target.HOSTILE : Target.PASSIVE;
+		} else {
+			return null; // стойки для брони, предметы, стрелы и т.п.
+		}
+
+		if (!cfg.shows(target) || self.squaredDistanceTo(entity) > cfg.maxDistance * cfg.maxDistance) {
+			return null;
+		}
+		return target;
 	}
 
 	@Override
@@ -76,20 +109,20 @@ public final class WallhackModule extends AbstractModule {
 			return;
 		}
 
-		int color = 0xFF000000 | ActestConfig.get().wallhackColor();
-		for (AbstractClientPlayerEntity target : client.world.getPlayers()) {
-			if (!isTarget(target, cfg)) {
+		for (Entity entity : client.world.getEntities()) {
+			Target target = classify(entity, cfg);
+			if (target == null) {
 				continue;
 			}
-			int[] rect = Projection.projectBox(interpolatedBox(target, tickDelta));
+			int[] rect = Projection.projectBox(interpolatedBox(entity, tickDelta));
 			if (rect == null) {
-				continue; // игрок позади камеры
+				continue; // сущность позади камеры
 			}
 			if (drawBoxes) {
-				drawBox(context, rect, color);
+				drawBox(context, rect, 0xFF000000 | cfg.color(target));
 			}
 			if (drawLabels) {
-				drawLabel(context, client, target, rect, cfg);
+				drawLabel(context, client, entity, rect, cfg);
 			}
 		}
 	}
@@ -118,8 +151,8 @@ public final class WallhackModule extends AbstractModule {
 		context.fill(x2 - 1, y1 + 1, x2, y2 - 1, color); // право
 	}
 
-	/** "Ник 12.3m" над рамкой. */
-	private static void drawLabel(DrawContext context, MinecraftClient client, AbstractClientPlayerEntity target, int[] r,
+	/** "Имя 12.3m" над рамкой: ник игрока или название моба (или его имя с бирки). */
+	private static void drawLabel(DrawContext context, MinecraftClient client, Entity target, int[] r,
 			ActestConfig.Wallhack cfg) {
 		MutableText text = Text.empty();
 		if (cfg.showNames) {

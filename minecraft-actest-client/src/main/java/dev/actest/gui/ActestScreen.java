@@ -1,6 +1,15 @@
 package dev.actest.gui;
 
 import dev.actest.config.ActestConfig;
+import dev.actest.config.ActestConfig.Wallhack.Target;
+import dev.actest.gui.widget.ColorChip;
+import dev.actest.gui.widget.FlatButton;
+import dev.actest.gui.widget.HueSlider;
+import dev.actest.gui.widget.PillToggle;
+import dev.actest.gui.widget.Segmented;
+import dev.actest.gui.widget.Slider;
+import dev.actest.gui.widget.TabButton;
+import dev.actest.gui.widget.ToggleSwitch;
 import dev.actest.module.Module;
 import dev.actest.module.ModuleManager;
 import dev.actest.module.SpeedModule;
@@ -8,189 +17,354 @@ import dev.actest.module.WallhackModule;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.tooltip.Tooltip;
-import net.minecraft.client.gui.widget.ButtonWidget;
-import net.minecraft.client.gui.widget.CyclingButtonWidget;
-import net.minecraft.client.gui.widget.SliderWidget;
+import net.minecraft.client.network.ServerInfo;
+import net.minecraft.client.option.KeyBinding;
+import net.minecraft.text.OrderedText;
 import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
-import java.util.function.DoubleConsumer;
-import java.util.function.DoubleFunction;
+import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 
 /**
- * Меню настроек (по умолчанию правый Shift).
- * Все изменения применяются сразу, а при закрытии сохраняются в config/actest.json.
- * Игра не ставится на паузу и фон не размывается, поэтому смену цвета подсветки
- * видно вживую за меню.
+ * Меню настроек (по умолчанию правый Shift): тёмная панель со вкладками
+ * Speed / WH / Прочее и самописными виджетами из пакета gui.widget.
+ * Изменения применяются сразу, при закрытии сохраняются в config/actest.json.
+ * Игра не ставится на паузу и фон не размывается — новый цвет подсветки
+ * видно на сущностях вживую за меню.
  */
 public final class ActestScreen extends Screen {
-	private static final int COLUMN_WIDTH = 150;
-	private static final int ROW_HEIGHT = 22;
-	private static final int ROWS = 8;
-	/** Быстрый выбор цвета подсветки. */
+	private enum Tab {
+		SPEED("Speed"), WH("WH"), OTHER("Прочее");
+
+		final String title;
+
+		Tab(String title) {
+			this.title = title;
+		}
+	}
+
+	private static final int PANEL_WIDTH = 360;
+	private static final int SIDEBAR_WIDTH = 86;
+	private static final int HEADER_HEIGHT = 24;
+	private static final int ROW_HEIGHT = 18;
+	private static final int MAX_ROWS = 9;
+	private static final int PAD = 10;
+	private static final int PANEL_HEIGHT = HEADER_HEIGHT + PAD + MAX_ROWS * ROW_HEIGHT + PAD;
 	private static final int[] PRESET_COLORS = {
 			0xFF4040, 0xFF9020, 0xFFFF40, 0x40FF40, 0x40FFFF, 0x4080FF, 0xC040FF, 0xFFFFFF};
 
-	private static final Text ON = Text.literal("ВКЛ").formatted(Formatting.GREEN);
-	private static final Text OFF = Text.literal("выкл").formatted(Formatting.GRAY);
-	private static final Text YES = Text.literal("да");
-	private static final Text NO = Text.literal("нет");
+	/** Открытая вкладка и группа, чей цвет редактируется, — запоминаются между открытиями меню. */
+	private static Tab tab = Tab.SPEED;
+	private static Target colorTarget = Target.PLAYERS;
+
+	/** Строка настройки: подпись слева, виджет справа. */
+	private record Row(int y, Supplier<Text> label) {
+	}
 
 	private final ModuleManager modules;
-	private int leftX;
-	private int rightX;
-	private int top;
-	private ValueSlider red;
-	private ValueSlider green;
-	private ValueSlider blue;
+	private final List<Row> rows = new ArrayList<>();
+	private boolean rebuild;
+	private int panelX;
+	private int panelY;
+	private int panelWidth;
+	private int contentX;
+	private int contentRight;
+	private int nextRowY;
+	/** Где начинается текст под строками вкладки (описание режима, справка). */
+	private int footerY;
 
 	public ActestScreen(ModuleManager modules) {
 		super(Text.literal("AC Test Client"));
 		this.modules = modules;
 	}
 
+	private static ActestConfig cfg() {
+		return ActestConfig.get();
+	}
+
+	// ======================== Построение виджетов ========================
+
 	@Override
 	protected void init() {
-		leftX = width / 2 - COLUMN_WIDTH - 5;
-		rightX = width / 2 + 5;
-		top = Math.max(34, (height - ROWS * ROW_HEIGHT) / 2 + 8);
-		boolean allowed = modules.canEnableModules(client);
-		ActestConfig cfg = ActestConfig.get();
+		rows.clear();
+		panelWidth = Math.min(PANEL_WIDTH, width - 8);
+		panelX = (width - panelWidth) / 2;
+		panelY = Math.max(4, (height - PANEL_HEIGHT) / 2);
+		contentX = panelX + SIDEBAR_WIDTH + PAD;
+		contentRight = panelX + panelWidth - PAD;
+		nextRowY = panelY + HEADER_HEIGHT + PAD;
 
-		// ---------------- Левая колонка: Speed ----------------
-		addDrawableChild(moduleToggle(modules.get(SpeedModule.class), leftX, row(0), allowed));
+		int tabY = panelY + HEADER_HEIGHT + 8;
+		for (Tab t : Tab.values()) {
+			BooleanSupplier indicator = switch (t) {
+				case SPEED -> modules.get(SpeedModule.class)::isEnabled;
+				case WH -> modules.get(WallhackModule.class)::isEnabled;
+				case OTHER -> null;
+			};
+			addDrawableChild(new TabButton(panelX, tabY, SIDEBAR_WIDTH, 18, t.title, () -> tab == t, indicator,
+					() -> switchTab(t)));
+			tabY += 20;
+		}
+		addDrawableChild(new FlatButton(panelX + panelWidth - 20, panelY + 5, 14, 14, "×", this::close));
 
-		addDrawableChild(CyclingButtonWidget.<ActestConfig.Speed.Mode>builder(mode -> Text.literal(switch (mode) {
-					case GROUND -> "По земле";
-					case BHOP -> "Bhop";
-				}))
-				.values(ActestConfig.Speed.Mode.values())
-				.initially(cfg.speed.mode)
-				.tooltip(mode -> Tooltip.of(Text.literal(switch (mode) {
-					case GROUND -> "Прямое изменение скорости на земле, прыжок и падение ванильные";
-					case BHOP -> "Автопрыжок на каждом касании земли + разворот скорости в воздухе за WASD";
-				})))
-				.build(leftX, row(1), COLUMN_WIDTH, 20, Text.literal("Режим"),
-						(button, mode) -> ActestConfig.get().speed.mode = mode));
+		switch (tab) {
+			case SPEED -> initSpeed();
+			case WH -> initWallhack();
+			case OTHER -> initOther();
+		}
+		footerY = nextRowY + 6;
+	}
 
-		addDrawableChild(new ValueSlider(leftX, row(2), COLUMN_WIDTH, 1.0, 5.0, 0.05, cfg.speed.multiplier,
-				v -> Text.literal(String.format(Locale.ROOT, "Скорость: x%.2f", v)),
-				v -> ActestConfig.get().speed.multiplier = v));
+	private void initSpeed() {
+		moduleRow(modules.get(SpeedModule.class));
 
-		addDrawableChild(CyclingButtonWidget.onOffBuilder(YES, NO)
-				.initially(cfg.hud.enabled)
-				.build(leftX, row(3), COLUMN_WIDTH, 20, Text.literal("Список модулей"),
-						(button, value) -> ActestConfig.get().hud.enabled = value));
+		int y = row("Режим");
+		addDrawableChild(new Segmented<>(contentRight - 130, center(y, 14), 130, 14, Text.literal("Режим"),
+				ActestConfig.Speed.Mode.values(),
+				mode -> mode == ActestConfig.Speed.Mode.GROUND ? "По земле" : "Bhop",
+				() -> cfg().speed.mode, mode -> cfg().speed.mode = mode));
 
-		addDrawableChild(CyclingButtonWidget.onOffBuilder(YES, NO)
-				.initially(cfg.speed.debugLog)
-				.tooltip(value -> Tooltip.of(Text.literal("Смещение за каждый тик в logs/latest.log — для сверки с логами античита")))
-				.build(leftX, row(4), COLUMN_WIDTH, 20, Text.literal("Debug-лог Speed"),
-						(button, value) -> ActestConfig.get().speed.debugLog = value));
+		y = row("Скорость");
+		addDrawableChild(new Slider(contentRight - 150, center(y, 14), 150, 14, Text.literal("Скорость"),
+				1.0, 5.0, 0.05,
+				() -> cfg().speed.multiplier, v -> cfg().speed.multiplier = v,
+				v -> String.format(Locale.ROOT, "x%.2f", v)));
 
-		addDrawableChild(ButtonWidget.builder(Text.literal("Готово"), button -> close())
-				.dimensions(leftX, row(ROWS - 1), COLUMN_WIDTH, 20)
-				.build());
+		y = row("Debug-лог");
+		ToggleSwitch debug = addDrawableChild(new ToggleSwitch(contentRight - ToggleSwitch.WIDTH,
+				center(y, ToggleSwitch.HEIGHT), Text.literal("Debug-лог"),
+				() -> cfg().speed.debugLog, v -> cfg().speed.debugLog = v));
+		debug.setTooltip(Tooltip.of(Text.literal("Смещение за каждый тик в logs/latest.log — для сверки с логами античита")));
+	}
 
-		// ---------------- Правая колонка: WH ----------------
-		addDrawableChild(moduleToggle(modules.get(WallhackModule.class), rightX, row(0), allowed));
+	private void initWallhack() {
+		moduleRow(modules.get(WallhackModule.class));
 
-		addDrawableChild(CyclingButtonWidget.<ActestConfig.Wallhack.Mode>builder(mode -> Text.literal(switch (mode) {
+		int y = row("Вид");
+		addDrawableChild(new Segmented<>(contentRight - 150, center(y, 14), 150, 14, Text.literal("Вид"),
+				ActestConfig.Wallhack.Mode.values(),
+				mode -> switch (mode) {
 					case GLOW -> "Контур";
 					case BOX -> "Рамки";
-					case BOTH -> "Контур + рамки";
-				}))
-				.values(ActestConfig.Wallhack.Mode.values())
-				.initially(cfg.wallhack.mode)
-				.build(rightX, row(1), COLUMN_WIDTH, 20, Text.literal("Подсветка"),
-						(button, mode) -> ActestConfig.get().wallhack.mode = mode));
+					case BOTH -> "Оба";
+				},
+				() -> cfg().wallhack.mode, mode -> cfg().wallhack.mode = mode));
 
-		int half = (COLUMN_WIDTH - 2) / 2;
-		addDrawableChild(CyclingButtonWidget.onOffBuilder(YES, NO)
-				.initially(cfg.wallhack.showNames)
-				.build(rightX, row(2), half, 20, Text.literal("Ники"),
-						(button, value) -> ActestConfig.get().wallhack.showNames = value));
-		addDrawableChild(CyclingButtonWidget.onOffBuilder(YES, NO)
-				.initially(cfg.wallhack.showDistance)
-				.build(rightX + half + 2, row(2), half, 20, Text.literal("Дист."),
-						(button, value) -> ActestConfig.get().wallhack.showDistance = value));
+		// Группы: цветной квадратик (выбрать, чей цвет править) + переключатель
+		for (Target target : Target.values()) {
+			y = row(targetName(target));
+			int toggleX = contentRight - ToggleSwitch.WIDTH;
+			addDrawableChild(new ColorChip(toggleX - 18, center(y, 10), 10, Text.literal("Цвет: " + targetName(target)),
+					() -> cfg().wallhack.color(target), () -> colorTarget == target, () -> colorTarget = target))
+					.setTooltip(Tooltip.of(Text.literal("Нажмите, чтобы менять цвет этой группы")));
+			addDrawableChild(new ToggleSwitch(toggleX, center(y, ToggleSwitch.HEIGHT), Text.literal(targetName(target)),
+					() -> cfg().wallhack.shows(target), v -> cfg().wallhack.setShown(target, v)));
+		}
 
-		addDrawableChild(new ValueSlider(rightX, row(3), COLUMN_WIDTH, 16, 512, 8, cfg.wallhack.maxDistance,
-				v -> Text.literal(String.format(Locale.ROOT, "Дальность: %.0f бл.", v)),
-				v -> ActestConfig.get().wallhack.maxDistance = v));
+		y = row("Подписи");
+		PillToggle distance = new PillToggle(0, center(y, 14), 14, "Дистанция",
+				() -> cfg().wallhack.showDistance, v -> cfg().wallhack.showDistance = v);
+		distance.setX(contentRight - distance.getWidth());
+		PillToggle names = new PillToggle(0, center(y, 14), 14, "Имена",
+				() -> cfg().wallhack.showNames, v -> cfg().wallhack.showNames = v);
+		names.setX(distance.getX() - 4 - names.getWidth());
+		addDrawableChild(names);
+		addDrawableChild(distance);
 
-		// Цвет линий: три ползунка R/G/B
-		int color = cfg.wallhackColor();
-		red = addDrawableChild(colorSlider(row(4), "Красный", (color >> 16) & 0xFF));
-		green = addDrawableChild(colorSlider(row(5), "Зелёный", (color >> 8) & 0xFF));
-		blue = addDrawableChild(colorSlider(row(6), "Синий", color & 0xFF));
+		y = row("Дальность");
+		addDrawableChild(new Slider(contentRight - 150, center(y, 14), 150, 14, Text.literal("Дальность"),
+				16, 512, 8,
+				() -> cfg().wallhack.maxDistance, v -> cfg().wallhack.maxDistance = v,
+				v -> String.format(Locale.ROOT, "%.0f бл.", v)));
 
-		// ...и готовые цвета: кнопки с цветным квадратом
-		int step = (COLUMN_WIDTH + 2) / PRESET_COLORS.length;
-		for (int i = 0; i < PRESET_COLORS.length; i++) {
-			int preset = PRESET_COLORS[i];
-			addDrawableChild(ButtonWidget.builder(
-							Text.literal("■").styled(style -> style.withColor(preset)),
-							button -> applyPreset(preset))
-					.dimensions(rightX + i * step, row(ROWS - 1), step - 2, 20)
-					.build());
+		y = row(() -> Text.literal("Цвет: " + targetGenitive(colorTarget)));
+		addDrawableChild(new HueSlider(contentRight - 150, center(y, 14), 150, 14, Text.literal("Оттенок"),
+				() -> cfg().wallhack.color(colorTarget), rgb -> cfg().wallhack.setColor(colorTarget, rgb)));
+
+		y = row(() -> Text.literal("Палитра").formatted(Formatting.GRAY));
+		int size = 10;
+		int gap = 6;
+		int x = contentRight - (PRESET_COLORS.length * (size + gap) - gap);
+		for (int preset : PRESET_COLORS) {
+			addDrawableChild(new ColorChip(x, center(y, size), size, Text.literal(String.format("#%06X", preset)),
+					() -> preset, () -> cfg().wallhack.color(colorTarget) == preset,
+					() -> cfg().wallhack.setColor(colorTarget, preset)));
+			x += size + gap;
 		}
 	}
 
-	private int row(int index) {
-		return top + index * ROW_HEIGHT;
+	private void initOther() {
+		int y = row("Список модулей на экране");
+		addDrawableChild(new ToggleSwitch(contentRight - ToggleSwitch.WIDTH, center(y, ToggleSwitch.HEIGHT),
+				Text.literal("Список модулей"), () -> cfg().hud.enabled, v -> cfg().hud.enabled = v));
+
+		y = row("Конфиг actest.json");
+		addDrawableChild(new FlatButton(contentRight - 86, center(y, 14), 86, 14, "Перечитать", () -> {
+			ActestConfig.load();
+			rebuild = true;
+		})).setTooltip(Tooltip.of(Text.literal("Загрузить config/actest.json заново, если правили его вручную")));
 	}
 
-	/** Кнопка «Модуль: ВКЛ/выкл». Если сервер не в allowedServers — неактивна. */
-	private CyclingButtonWidget<Boolean> moduleToggle(Module module, int x, int y, boolean allowed) {
-		CyclingButtonWidget<Boolean> button = CyclingButtonWidget.onOffBuilder(ON, OFF)
-				.initially(module.isEnabled())
-				.build(x, y, COLUMN_WIDTH, 20, Text.literal(module.getName()),
-						(b, value) -> module.setEnabled(value));
-		if (!allowed && !module.isEnabled()) {
-			button.active = false;
-			button.setTooltip(Tooltip.of(Text.literal("Этот сервер не в allowedServers (config/actest.json)")));
+	/** Строка «Включён» с переключателем модуля; неактивна, если сервер не в allowedServers. */
+	private void moduleRow(Module module) {
+		int y = row("Включён");
+		ToggleSwitch toggle = addDrawableChild(new ToggleSwitch(contentRight - ToggleSwitch.WIDTH,
+				center(y, ToggleSwitch.HEIGHT), Text.literal(module.getName()), module::isEnabled, module::setEnabled));
+		if (!modules.canEnableModules(client) && !module.isEnabled()) {
+			toggle.active = false;
+			toggle.setTooltip(Tooltip.of(Text.literal("Этот сервер не в allowedServers (config/actest.json)")));
 		}
-		return button;
 	}
 
-	private ValueSlider colorSlider(int y, String name, int initial) {
-		return new ValueSlider(rightX, y, COLUMN_WIDTH, 0, 255, 1, initial,
-				v -> Text.literal(name + ": " + (int) v),
-				v -> applySliderColor());
+	private int row(String label) {
+		Text text = Text.literal(label);
+		return row(() -> text);
 	}
 
-	private void applySliderColor() {
-		int rgb = ((int) red.get() << 16) | ((int) green.get() << 8) | (int) blue.get();
-		ActestConfig.get().setWallhackColor(rgb);
+	private int row(Supplier<Text> label) {
+		int y = nextRowY;
+		rows.add(new Row(y, label));
+		nextRowY += ROW_HEIGHT;
+		return y;
 	}
 
-	private void applyPreset(int rgb) {
-		ActestConfig.get().setWallhackColor(rgb);
-		red.set((rgb >> 16) & 0xFF);
-		green.set((rgb >> 8) & 0xFF);
-		blue.set(rgb & 0xFF);
+	/** Y виджета высотой h, отцентрованного в строке rowY. */
+	private static int center(int rowY, int h) {
+		return rowY + (ROW_HEIGHT - h) / 2;
 	}
+
+	private void switchTab(Tab target) {
+		if (tab != target) {
+			tab = target;
+			// Пересобираем виджеты в начале следующего кадра, а не посреди обработки клика
+			rebuild = true;
+		}
+	}
+
+	private static String targetName(Target target) {
+		return switch (target) {
+			case PLAYERS -> "Игроки";
+			case HOSTILE -> "Враждебные мобы";
+			case PASSIVE -> "Мирные мобы";
+		};
+	}
+
+	private static String targetGenitive(Target target) {
+		return switch (target) {
+			case PLAYERS -> "игроков";
+			case HOSTILE -> "враждебных";
+			case PASSIVE -> "мирных";
+		};
+	}
+
+	// ======================== Отрисовка ========================
 
 	@Override
 	public void render(DrawContext context, int mouseX, int mouseY, float delta) {
+		if (rebuild) {
+			rebuild = false;
+			clearAndInit();
+		}
+		// Screen#render вызывает renderBackground (панель, подписи), затем рисует виджеты
 		super.render(context, mouseX, mouseY, delta);
-		context.drawCenteredTextWithShadow(textRenderer, title, width / 2, top - 26, 0xFFFFFFFF);
-		context.drawTextWithShadow(textRenderer, Text.literal("Speed").formatted(Formatting.AQUA), leftX, top - 12, 0xFFFFFFFF);
-		context.drawTextWithShadow(textRenderer, Text.literal("WH").formatted(Formatting.AQUA), rightX, top - 12, 0xFFFFFFFF);
-
-		// Образец текущего цвета подсветки справа от заголовка WH
-		int right = rightX + COLUMN_WIDTH;
-		context.fill(right - 41, top - 14, right, top - 3, 0xFFFFFFFF);
-		context.fill(right - 40, top - 13, right - 1, top - 4, 0xFF000000 | ActestConfig.get().wallhackColor());
 	}
 
-	/** Без размытия и затемнения всего экрана — только тёмная подложка под меню. */
+	/** Вместо ванильного размытия: лёгкое затемнение, панель, шапка, боковая панель и подписи строк. */
 	@Override
 	public void renderBackground(DrawContext context, int mouseX, int mouseY, float delta) {
-		context.fill(leftX - 6, top - 32, rightX + COLUMN_WIDTH + 6, row(ROWS) + 4, 0xB0000000);
+		int x1 = panelX;
+		int y1 = panelY;
+		int x2 = panelX + panelWidth;
+		int y2 = panelY + PANEL_HEIGHT;
+		int bodyTop = y1 + HEADER_HEIGHT + 1;
+
+		context.fill(0, 0, width, height, Theme.BACKDROP);
+		Theme.roundRect(context, x1 + 2, y1 + 4, x2 + 4, y2 + 6, 4, Theme.SHADOW);
+		Theme.roundRect(context, x1 - 1, y1 - 1, x2 + 1, y2 + 1, 4, Theme.BORDER);
+
+		// Шапка: логотип-квадрат, название, статус сервера
+		Theme.roundRect(context, x1, y1, x2, y1 + HEADER_HEIGHT, 3, Theme.HEADER, true, true, false, false);
+		context.fill(x1 + 3, y1, x2 - 3, y1 + 1, 0x14FFFFFF);
+		context.fill(x1, y1 + HEADER_HEIGHT, x2, bodyTop, Theme.HEADER_LINE);
+		Theme.roundRect(context, x1 + 9, y1 + 8, x1 + 17, y1 + 16, 2, Theme.ACCENT);
+		context.drawText(textRenderer, Text.literal("AC Test Client").formatted(Formatting.BOLD), x1 + 22, y1 + 8, Theme.TEXT, false);
+		drawServerStatus(context, x2 - 26, y1 + 8);
+
+		// Боковая панель и область настроек
+		Theme.roundRect(context, x1, bodyTop, x1 + SIDEBAR_WIDTH, y2, 3, Theme.SIDEBAR, false, false, true, false);
+		context.fill(x1 + SIDEBAR_WIDTH, bodyTop, x1 + SIDEBAR_WIDTH + 1, y2, Theme.BORDER);
+		Theme.roundRect(context, x1 + SIDEBAR_WIDTH + 1, bodyTop, x2, y2, 3, Theme.PANEL, false, false, false, true);
+		context.drawText(textRenderer, "Esc — закрыть", x1 + 12, y2 - 14, Theme.TEXT_DISABLED, false);
+
+		// Строки: подсветка под курсором и подпись слева
+		for (Row row : rows) {
+			if (mouseX >= contentX - 4 && mouseX < contentRight + 4 && mouseY >= row.y() && mouseY < row.y() + ROW_HEIGHT) {
+				Theme.roundRect(context, contentX - 4, row.y(), contentRight + 4, row.y() + ROW_HEIGHT, 2, Theme.ROW_HOVER);
+			}
+			context.drawText(textRenderer, row.label().get(), contentX, row.y() + (ROW_HEIGHT - 8) / 2, Theme.TEXT, false);
+		}
+
+		switch (tab) {
+			case SPEED -> drawSpeedHelp(context);
+			case OTHER -> drawOtherHelp(context);
+			case WH -> {
+			}
+		}
 	}
+
+	/** Цветная точка + адрес: зелёная — модули разрешены, красная — сервер не в allowedServers. */
+	private void drawServerStatus(DrawContext context, int right, int y) {
+		boolean allowed = modules.canEnableModules(client);
+		ServerInfo server = client.getCurrentServerEntry();
+		String where = client.isInSingleplayer() ? "одиночная игра" : server != null ? server.address : "нет сервера";
+		where = textRenderer.trimToWidth(where, 120);
+		int textX = right - textRenderer.getWidth(where);
+		Theme.roundRect(context, textX - 9, y + 1, textX - 4, y + 6, 2, allowed ? Theme.GOOD : Theme.BAD);
+		context.drawText(textRenderer, where, textX, y, Theme.TEXT_MUTED, false);
+	}
+
+	private void drawSpeedHelp(DrawContext context) {
+		String text = cfg().speed.mode == ActestConfig.Speed.Mode.GROUND
+				? "По земле: меняется только скорость ходьбы по земле, прыжок и падение остаются ванильными."
+				: "Bhop: автопрыжок при каждом касании земли с ускорением, в воздухе скорость поворачивает за WASD.";
+		int y = drawWrapped(context, text, footerY, Theme.TEXT_MUTED);
+		drawWrapped(context, "x1.00 — обычная скорость, x1.40 ≈ легитный спринт под Speed II.", y + 4, Theme.TEXT_DISABLED);
+	}
+
+	private void drawOtherHelp(DrawContext context) {
+		int y = footerY;
+		context.drawText(textRenderer, "Клавиши", contentX, y, Theme.TEXT_MUTED, false);
+		y += 13;
+		y = drawKeyLine(context, "Speed", modules.get(SpeedModule.class).getKeyBinding(), y);
+		y = drawKeyLine(context, "WH", modules.get(WallhackModule.class).getKeyBinding(), y);
+		y = drawKeyLine(context, "Это меню", modules.getMenuKey(), y);
+		drawWrapped(context, "Разрешённые серверы: " + String.join(", ", cfg().allowedServers), y + 4, Theme.TEXT_DISABLED);
+	}
+
+	/** «Название ........ [клавиша]» — клавиша в виде «кнопки клавиатуры». */
+	private int drawKeyLine(DrawContext context, String name, KeyBinding key, int y) {
+		context.drawText(textRenderer, name, contentX, y, Theme.TEXT, false);
+		Text keyName = key.getBoundKeyLocalizedText();
+		int w = textRenderer.getWidth(keyName) + 8;
+		Theme.roundRect(context, contentRight - w, y - 2, contentRight, y + 10, 2, Theme.CONTROL);
+		context.drawText(textRenderer, keyName, contentRight - w + 4, y, Theme.TEXT, false);
+		return y + 15;
+	}
+
+	/** Текст с переносом по ширине области настроек; возвращает Y под последней строкой. */
+	private int drawWrapped(DrawContext context, String text, int y, int color) {
+		for (OrderedText line : textRenderer.wrapLines(Text.literal(text), contentRight - contentX)) {
+			context.drawText(textRenderer, line, contentX, y, color, false);
+			y += 10;
+		}
+		return y;
+	}
+
+	// ======================== Поведение ========================
 
 	@Override
 	public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
@@ -210,47 +384,5 @@ public final class ActestScreen extends Screen {
 	@Override
 	public void removed() {
 		ActestConfig.save();
-	}
-
-	/** Ползунок с реальным диапазоном [min, max] и шагом step (ванильный SliderWidget хранит 0..1). */
-	private static final class ValueSlider extends SliderWidget {
-		private final double min;
-		private final double max;
-		private final double step;
-		private final DoubleFunction<Text> label;
-		private final DoubleConsumer onChange;
-
-		ValueSlider(int x, int y, int width, double min, double max, double step, double initial,
-				DoubleFunction<Text> label, DoubleConsumer onChange) {
-			super(x, y, width, 20, Text.empty(), 0.0);
-			this.min = min;
-			this.max = max;
-			this.step = step;
-			this.label = label;
-			this.onChange = onChange;
-			set(initial);
-		}
-
-		/** Текущее значение, округлённое до шага. */
-		double get() {
-			double snapped = min + Math.round(value * (max - min) / step) * step;
-			return Math.round(Math.min(max, snapped) * 10000.0) / 10000.0;
-		}
-
-		/** Выставить значение без вызова onChange (для пресетов цвета). */
-		void set(double real) {
-			value = Math.max(0.0, Math.min(1.0, (real - min) / (max - min)));
-			updateMessage();
-		}
-
-		@Override
-		protected void updateMessage() {
-			setMessage(label.apply(get()));
-		}
-
-		@Override
-		protected void applyValue() {
-			onChange.accept(get());
-		}
 	}
 }

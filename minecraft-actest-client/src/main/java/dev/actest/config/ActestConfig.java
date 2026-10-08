@@ -25,7 +25,6 @@ import java.util.Locale;
 public final class ActestConfig {
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 	private static final Path PATH = FabricLoader.getInstance().getConfigDir().resolve("actest.json");
-	private static final int DEFAULT_COLOR = 0xFF4040;
 
 	private static ActestConfig instance = new ActestConfig();
 	private static long lastModified = Long.MIN_VALUE;
@@ -44,9 +43,6 @@ public final class ActestConfig {
 	public Wallhack wallhack = new Wallhack();
 	public Hud hud = new Hud();
 
-	/** Цвет WH в виде 0xRRGGBB, вычисляется из wallhack.color; в JSON не пишется. */
-	private transient int wallhackColorRgb = DEFAULT_COLOR;
-
 	public static final class Speed {
 		public enum Mode { GROUND, BHOP }
 
@@ -61,14 +57,66 @@ public final class ActestConfig {
 	public static final class Wallhack {
 		public enum Mode { GLOW, BOX, BOTH }
 
+		/** Группы подсвечиваемых сущностей: у каждой свой переключатель и цвет. */
+		public enum Target { PLAYERS, HOSTILE, PASSIVE }
+
 		/** GLOW — ванильный контур (как эффект свечения), BOX — 2D-рамки, BOTH — оба. */
 		public Mode mode = Mode.GLOW;
+		/** Подсвечивать других игроков. */
+		public boolean players = true;
+		/** Подсвечивать враждебных мобов (зомби, скелеты, криперы, слаймы, гасты…). */
+		public boolean hostileMobs = false;
+		/** Подсвечивать остальных мобов (животные, жители, големы, рыбы…). */
+		public boolean passiveMobs = false;
 		public boolean showNames = true;
 		public boolean showDistance = true;
-		/** Цвет контура и рамок, "#RRGGBB". */
+		/** Цвета контура и рамок в формате "#RRGGBB": игроки, враждебные и мирные мобы. */
 		public String color = "#FF4040";
-		/** Игроки дальше этой дистанции (в блоках) не подсвечиваются. */
+		public String hostileColor = "#FF9020";
+		public String passiveColor = "#40FF40";
+		/** Сущности дальше этой дистанции (в блоках) не подсвечиваются. */
 		public double maxDistance = 128.0;
+
+		/** Разобранные цвета 0xRRGGBB по индексу Target; в JSON не пишутся. */
+		private transient int[] rgb = {0xFF4040, 0xFF9020, 0x40FF40};
+
+		public boolean shows(Target target) {
+			return switch (target) {
+				case PLAYERS -> players;
+				case HOSTILE -> hostileMobs;
+				case PASSIVE -> passiveMobs;
+			};
+		}
+
+		public void setShown(Target target, boolean value) {
+			switch (target) {
+				case PLAYERS -> players = value;
+				case HOSTILE -> hostileMobs = value;
+				case PASSIVE -> passiveMobs = value;
+			}
+		}
+
+		public int color(Target target) {
+			return rgb[target.ordinal()];
+		}
+
+		/** Меняет цвет группы (из меню): и строку "#RRGGBB" для JSON, и разобранное значение. */
+		public void setColor(Target target, int value) {
+			rgb[target.ordinal()] = value & 0xFFFFFF;
+			String hex = String.format(Locale.ROOT, "#%06X", value & 0xFFFFFF);
+			switch (target) {
+				case PLAYERS -> color = hex;
+				case HOSTILE -> hostileColor = hex;
+				case PASSIVE -> passiveColor = hex;
+			}
+		}
+
+		private void parseColors() {
+			rgb = new int[] {
+					parseColor(color, 0xFF4040),
+					parseColor(hostileColor, 0xFF9020),
+					parseColor(passiveColor, 0x40FF40)};
+		}
 	}
 
 	public static final class Hud {
@@ -85,16 +133,6 @@ public final class ActestConfig {
 
 	public static Path path() {
 		return PATH;
-	}
-
-	public int wallhackColor() {
-		return wallhackColorRgb;
-	}
-
-	/** Меняет цвет WH (из меню): и строку "#RRGGBB" для JSON, и разобранное значение. */
-	public void setWallhackColor(int rgb) {
-		wallhackColorRgb = rgb & 0xFFFFFF;
-		wallhack.color = String.format(Locale.ROOT, "#%06X", wallhackColorRgb);
 	}
 
 	/** Загрузка при старте: если файла нет — создаём его со значениями по умолчанию. */
@@ -167,19 +205,20 @@ public final class ActestConfig {
 		if (wallhack == null) wallhack = new Wallhack();
 		if (wallhack.mode == null) wallhack.mode = Wallhack.Mode.GLOW;
 		if (Double.isNaN(wallhack.maxDistance) || wallhack.maxDistance < 1.0) wallhack.maxDistance = 1.0;
-		wallhackColorRgb = parseColor(wallhack.color);
+		wallhack.parseColors();
 		if (hud == null) hud = new Hud();
 	}
 
-	private static int parseColor(String value) {
-		if (value == null) return DEFAULT_COLOR;
+	private static int parseColor(String value, int fallback) {
+		if (value == null) return fallback;
 		String hex = value.trim();
 		if (hex.startsWith("#")) hex = hex.substring(1);
 		try {
 			return Integer.parseInt(hex, 16) & 0xFFFFFF;
 		} catch (NumberFormatException e) {
-			ActestClient.LOGGER.warn("Неверный цвет '{}', используется #FF4040", value);
-			return DEFAULT_COLOR;
+			ActestClient.LOGGER.warn("Неверный цвет '{}', используется #{}", value,
+					String.format(Locale.ROOT, "%06X", fallback));
+			return fallback;
 		}
 	}
 }
