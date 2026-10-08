@@ -1,0 +1,13 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "dev.actest.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "EntityMixin",
+    "MinecraftClientMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
