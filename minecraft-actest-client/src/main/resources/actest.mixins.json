@@ -4,6 +4,7 @@
   "package": "dev.actest.mixin",
   "compatibilityLevel": "JAVA_21",
   "client": [
+    "ClientPlayerEntityMixin",
     "EntityMixin",
     "MinecraftClientMixin"
   ],

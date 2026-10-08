@@ -37,3 +37,23 @@ jobs:
           echo "-----BEGIN JAR-----"
           base64 -w 100 build/libs/actest-client-*.jar
           echo "-----END JAR-----"
+      # Если в сообщении коммита есть [inspect], печатает через javap сигнатуры и байткод
+      # классов Minecraft (Yarn), на которые опираются mixin'ы и модули
+      - name: Inspect Minecraft classes
+        if: always() && contains(github.event.head_commit.message, '[inspect]')
+        run: |
+          JAR=""
+          for j in $(find ~/.gradle .gradle -name '*.jar' -path '*minecraft*' 2>/dev/null); do
+            if unzip -l "$j" 2>/dev/null | grep -q 'net/minecraft/client/network/ClientPlayerEntity.class'; then JAR="$j"; break; fi
+          done
+          echo "named jar: $JAR"
+          echo "=== ClientPlayerEntity#sendMovementPackets invokes ==="
+          javap -c -p -cp "$JAR" net.minecraft.client.network.ClientPlayerEntity | sed -n '/void sendMovementPackets()/,/^$/p' | grep -E 'invoke|new ' || true
+          echo "=== PlayerMoveC2SPacket\$OnGroundOnly ==="
+          javap -p -cp "$JAR" 'net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket$OnGroundOnly' || true
+          echo "=== Entity fields/methods ==="
+          javap -p -cp "$JAR" net.minecraft.entity.Entity | grep -E 'fallDistance|getVelocityMultiplier|getWorld\(\)|isOnGround\(\)' || true
+          echo "=== Block / AbstractBlock velocity multiplier ==="
+          javap -p -cp "$JAR" net.minecraft.block.Block | grep -E 'VelocityMultiplier' || true
+          javap -p -cp "$JAR" net.minecraft.block.AbstractBlock | grep -E 'VelocityMultiplier' || true
+          echo "=== END INSPECT ==="

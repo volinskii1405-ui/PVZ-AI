@@ -39,7 +39,13 @@ public final class ActestConfig {
 	/** Разрешить модули в одиночной игре (удобно для отладки рендера). */
 	public boolean allowSingleplayer = true;
 
+	/** Писать в лог клиента смещение и onGround за каждый тик — для сверки с логами античита. */
+	public boolean debugLog = false;
+
 	public Speed speed = new Speed();
+	public Fly fly = new Fly();
+	public NoFall noFall = new NoFall();
+	public NoSlow noSlow = new NoSlow();
 	public Wallhack wallhack = new Wallhack();
 	public Hud hud = new Hud();
 
@@ -50,8 +56,33 @@ public final class ActestConfig {
 		public Mode mode = Mode.GROUND;
 		/** Множитель относительно ванильной скорости (1.0 = как без мода), диапазон 1.0–5.0. */
 		public double multiplier = 1.5;
-		/** Писать в лог клиента смещение за каждый тик — для сверки с логами античита. */
-		public boolean debugLog = false;
+	}
+
+	public static final class Fly {
+		public enum Mode { MOTION, GLIDE }
+
+		/** MOTION — зависание и полёт по WASD/Space/Shift, GLIDE — медленное падение. */
+		public Mode mode = Mode.MOTION;
+		/** Горизонтальная скорость полёта, блоков за тик (0.1–2.0). */
+		public double speed = 0.5;
+		/** Скорость подъёма/спуска на Space/Shift, блоков за тик (0.1–2.0). */
+		public double verticalSpeed = 0.4;
+		/** Скорость падения в режиме GLIDE, блоков за тик (0.01–0.3). */
+		public double glideSpeed = 0.05;
+	}
+
+	public static final class NoFall {
+		public enum Mode { SPOOF, PACKET }
+
+		/** SPOOF — onGround=true в обычных пакетах движения, PACKET — отдельный OnGroundOnly(true). */
+		public Mode mode = Mode.SPOOF;
+	}
+
+	public static final class NoSlow {
+		/** Без замедления при использовании предметов: еда, зелья, лук, арбалет, щит, трезубец… */
+		public boolean items = true;
+		/** Без замедления на песке душ и блоке мёда. */
+		public boolean blocks = true;
 	}
 
 	public static final class Wallhack {
@@ -201,12 +232,24 @@ public final class ActestConfig {
 		if (allowedServers == null) allowedServers = new ArrayList<>();
 		if (speed == null) speed = new Speed();
 		if (speed.mode == null) speed.mode = Speed.Mode.GROUND;
-		speed.multiplier = Double.isNaN(speed.multiplier) ? 1.0 : Math.max(1.0, Math.min(5.0, speed.multiplier));
+		speed.multiplier = clamp(speed.multiplier, 1.0, 5.0, 1.0);
+		if (fly == null) fly = new Fly();
+		if (fly.mode == null) fly.mode = Fly.Mode.MOTION;
+		fly.speed = clamp(fly.speed, 0.1, 2.0, 0.5);
+		fly.verticalSpeed = clamp(fly.verticalSpeed, 0.1, 2.0, 0.4);
+		fly.glideSpeed = clamp(fly.glideSpeed, 0.01, 0.3, 0.05);
+		if (noFall == null) noFall = new NoFall();
+		if (noFall.mode == null) noFall.mode = NoFall.Mode.SPOOF;
+		if (noSlow == null) noSlow = new NoSlow();
 		if (wallhack == null) wallhack = new Wallhack();
 		if (wallhack.mode == null) wallhack.mode = Wallhack.Mode.GLOW;
 		if (Double.isNaN(wallhack.maxDistance) || wallhack.maxDistance < 1.0) wallhack.maxDistance = 1.0;
 		wallhack.parseColors();
 		if (hud == null) hud = new Hud();
+	}
+
+	private static double clamp(double value, double min, double max, double fallback) {
+		return Double.isNaN(value) ? fallback : Math.max(min, Math.min(max, value));
 	}
 
 	private static int parseColor(String value, int fallback) {

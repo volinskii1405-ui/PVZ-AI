@@ -26,11 +26,15 @@ public final class ModuleManager {
 	/** Клавиша меню настроек (по умолчанию правый Shift). */
 	private final KeyBinding menuKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
 			"key.actest.menu", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_RIGHT_SHIFT, ActestClient.KEY_CATEGORY));
+	private final MovementLog movementLog = new MovementLog();
 	private int configCheckTimer;
 
 	public ModuleManager() {
 		// Новые модули регистрируются здесь — порядок = порядок в HUD-списке
 		register(new SpeedModule());
+		register(new FlyModule());
+		register(new NoFallModule());
+		register(new NoSlowModule());
 		register(new WallhackModule());
 	}
 
@@ -95,6 +99,12 @@ public final class ModuleManager {
 				// Вышли из мира или зашли на сервер не из списка — выключаем
 				module.setEnabled(false);
 			}
+		}
+
+		if (allowed && ActestConfig.get().debugLog) {
+			movementLog.tick(client.player, modules, get(NoFallModule.class));
+		} else {
+			movementLog.reset();
 		}
 	}
 
