@@ -28,3 +28,12 @@ jobs:
           name: actest-client
           path: minecraft-actest-client/build/libs/*.jar
           if-no-files-found: error
+      # Если в сообщении коммита есть [dump-jar], jar печатается в лог в base64,
+      # чтобы его можно было забрать там, где нет доступа к хранилищу артефактов
+      - name: Dump jar as base64
+        if: contains(github.event.head_commit.message, '[dump-jar]')
+        run: |
+          sha256sum build/libs/actest-client-*.jar
+          echo "-----BEGIN JAR-----"
+          base64 -w 100 build/libs/actest-client-*.jar
+          echo "-----END JAR-----"

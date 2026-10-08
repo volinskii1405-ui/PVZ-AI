@@ -1,5 +1,6 @@
 {
   "category.actest": "AC Test Client",
   "key.actest.speed": "Toggle Speed",
-  "key.actest.wallhack": "Toggle WH (ESP)"
+  "key.actest.wallhack": "Toggle WH (ESP)",
+  "key.actest.menu": "Open settings menu"
 }

@@ -14,6 +14,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * Конфиг мода: файл config/actest.json в папке игры.
@@ -90,6 +91,12 @@ public final class ActestConfig {
 		return wallhackColorRgb;
 	}
 
+	/** Меняет цвет WH (из меню): и строку "#RRGGBB" для JSON, и разобранное значение. */
+	public void setWallhackColor(int rgb) {
+		wallhackColorRgb = rgb & 0xFFFFFF;
+		wallhack.color = String.format(Locale.ROOT, "#%06X", wallhackColorRgb);
+	}
+
 	/** Загрузка при старте: если файла нет — создаём его со значениями по умолчанию. */
 	public static void load() {
 		if (Files.notExists(PATH)) {
@@ -120,6 +127,8 @@ public final class ActestConfig {
 			try (Writer writer = Files.newBufferedWriter(PATH, StandardCharsets.UTF_8)) {
 				GSON.toJson(instance, writer);
 			}
+			// Свою же запись не считаем внешним изменением файла
+			lastModified = modifiedTime();
 		} catch (IOException e) {
 			ActestClient.LOGGER.error("Не удалось сохранить {}", PATH, e);
 		}

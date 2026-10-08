@@ -1,11 +1,17 @@
 package dev.actest.module;
 
+import dev.actest.ActestClient;
 import dev.actest.config.ActestConfig;
+import dev.actest.gui.ActestScreen;
 import dev.actest.render.ModuleListHud;
+import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.DrawContext;
+import net.minecraft.client.option.KeyBinding;
+import net.minecraft.client.util.InputUtil;
 import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
+import org.lwjgl.glfw.GLFW;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -17,6 +23,9 @@ import java.util.Map;
 public final class ModuleManager {
 	private final List<Module> modules = new ArrayList<>();
 	private final Map<Class<? extends Module>, Module> byType = new HashMap<>();
+	/** Клавиша меню настроек (по умолчанию правый Shift). */
+	private final KeyBinding menuKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
+			"key.actest.menu", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_RIGHT_SHIFT, ActestClient.KEY_CATEGORY));
 	private int configCheckTimer;
 
 	public ModuleManager() {
@@ -39,12 +48,27 @@ public final class ModuleManager {
 		return type.cast(byType.get(type));
 	}
 
+	public KeyBinding getMenuKey() {
+		return menuKey;
+	}
+
+	/** Можно ли включать модули прямо сейчас (мы в мире и сервер в allowedServers). */
+	public boolean canEnableModules(MinecraftClient client) {
+		return ServerGuard.isAllowed(client);
+	}
+
 	/** ClientTickEvents.END_CLIENT_TICK */
 	public void onTick(MinecraftClient client) {
 		// Горячая перезагрузка конфига: проверяем дату изменения файла раз в секунду
 		if (++configCheckTimer >= 20) {
 			configCheckTimer = 0;
 			ActestConfig.reloadIfChanged();
+		}
+
+		while (menuKey.wasPressed()) {
+			if (client.currentScreen == null) {
+				client.setScreen(new ActestScreen(this));
+			}
 		}
 
 		boolean allowed = ServerGuard.isAllowed(client);
