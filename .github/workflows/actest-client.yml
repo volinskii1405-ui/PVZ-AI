@@ -57,3 +57,62 @@ jobs:
           javap -p -cp "$JAR" net.minecraft.block.Block | grep -E 'VelocityMultiplier' || true
           javap -p -cp "$JAR" net.minecraft.block.AbstractBlock | grep -E 'VelocityMultiplier' || true
           echo "=== END INSPECT ==="
+      # Если в сообщении коммита есть [decompile], декомпилирует (Vineflower) нужные классы
+      # Minecraft (Yarn) и печатает выбранные методы — для разбора поведения ванили
+      - name: Decompile Minecraft methods
+        if: always() && contains(github.event.head_commit.message, '[decompile]')
+        run: |
+          JAR=""
+          for j in $(find ~/.gradle .gradle -name '*.jar' -path '*minecraft*' 2>/dev/null); do
+            if unzip -l "$j" 2>/dev/null | grep -q 'net/minecraft/client/network/ClientPlayerEntity.class'; then JAR="$j"; break; fi
+          done
+          curl -sSL -o /tmp/vineflower.jar https://repo1.maven.org/maven2/org/vineflower/vineflower/1.10.1/vineflower-1.10.1.jar
+          mkdir -p /tmp/cls /tmp/src
+          (cd /tmp/cls && unzip -q -o "$JAR" \
+            'net/minecraft/entity/Entity.class' \
+            'net/minecraft/entity/LivingEntity.class' \
+            'net/minecraft/entity/player/PlayerEntity.class' \
+            'net/minecraft/server/network/ServerPlayerEntity.class' \
+            'net/minecraft/server/network/ServerPlayNetworkHandler.class' \
+            'net/minecraft/client/network/ClientPlayerEntity.class' \
+            'net/minecraft/entity/attribute/EntityAttributes.class')
+          java -jar /tmp/vineflower.jar -log=WARN /tmp/cls /tmp/src > /dev/null
+          python3 - <<'PY'
+          import re, glob
+          def show(cls, pattern, limit=220):
+              paths = glob.glob(f"/tmp/src/**/{cls}.java", recursive=True)
+              if not paths:
+                  print(f"!!! {cls}.java not found"); return
+              lines = open(paths[0]).read().split("\n")
+              found = False
+              for i, line in enumerate(lines):
+                  if re.search(pattern, line):
+                      found = True
+                      depth, out = 0, []
+                      for j in range(i, min(len(lines), i + limit)):
+                          out.append(lines[j])
+                          depth += lines[j].count("{") - lines[j].count("}")
+                          if depth <= 0 and "{" in "".join(out):
+                              break
+                      print(f"===== {cls}:{i + 1}")
+                      print("\n".join(out))
+              if not found:
+                  print(f"!!! {cls}: no match for {pattern}")
+          show("Entity", r"public void move\(MovementType")
+          show("Entity", r"protected void fall\(double")
+          show("Entity", r"boolean isLogicalSideForUpdatingMovement\(")
+          show("LivingEntity", r"protected void fall\(double")
+          show("LivingEntity", r"public boolean handleFallDamage\(")
+          show("ServerPlayerEntity", r"void handleFall\(")
+          show("ServerPlayerEntity", r"protected void fall\(double")
+          show("ServerPlayNetworkHandler", r"public void onPlayerMove\(", 260)
+          show("ServerPlayNetworkHandler", r"public void onPlayerInteractEntity\(", 80)
+          show("ClientPlayerEntity", r"public void tick\(\)")
+          show("ClientPlayerEntity", r"boolean isLogicalSideForUpdatingMovement\(")
+          show("PlayerEntity", r"double getEntityInteractionRange\(")
+          show("PlayerEntity", r"boolean canInteractWithEntity")
+          for line in open(glob.glob("/tmp/src/**/EntityAttributes.java", recursive=True)[0]):
+              if re.search(r"STEP_HEIGHT|INTERACTION_RANGE", line):
+                  print("ATTR:", line.rstrip())
+          print("===== END DECOMPILE")
+          PY

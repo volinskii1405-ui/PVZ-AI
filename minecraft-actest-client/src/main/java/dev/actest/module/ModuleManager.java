@@ -35,6 +35,8 @@ public final class ModuleManager {
 		register(new FlyModule());
 		register(new NoFallModule());
 		register(new NoSlowModule());
+		register(new StepModule());
+		register(new ReachModule());
 		register(new WallhackModule());
 	}
 

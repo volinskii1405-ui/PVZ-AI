@@ -16,7 +16,9 @@ import dev.actest.module.Module;
 import dev.actest.module.ModuleManager;
 import dev.actest.module.NoFallModule;
 import dev.actest.module.NoSlowModule;
+import dev.actest.module.ReachModule;
 import dev.actest.module.SpeedModule;
+import dev.actest.module.StepModule;
 import dev.actest.module.WallhackModule;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
@@ -40,14 +42,14 @@ import java.util.function.Supplier;
 
 /**
  * Меню настроек (по умолчанию правый Shift).
- * Шапка — вкладки категорий (Движение / Визуал / Прочее), слева — страницы
+ * Шапка — вкладки категорий (Движение / Бой / Визуал / Прочее), слева — страницы
  * выбранной категории (модули с индикатором вкл/выкл), справа — настройки страницы.
  * Изменения применяются сразу, при закрытии сохраняются в config/actest.json.
  * Игра не ставится на паузу и фон не размывается — изменения видно вживую за меню.
  */
 public final class ActestScreen extends Screen {
 	private enum Category {
-		MOVEMENT("Движение"), RENDER("Визуал"), OTHER("Прочее");
+		MOVEMENT("Движение"), COMBAT("Бой"), RENDER("Визуал"), OTHER("Прочее");
 
 		final String title;
 
@@ -109,7 +111,10 @@ public final class ActestScreen extends Screen {
 					modulePage(SpeedModule.class, this::buildSpeed, this::speedHelp),
 					modulePage(FlyModule.class, this::buildFly, this::flyHelp),
 					modulePage(NoFallModule.class, this::buildNoFall, this::noFallHelp),
-					modulePage(NoSlowModule.class, this::buildNoSlow, this::noSlowHelp));
+					modulePage(NoSlowModule.class, this::buildNoSlow, this::noSlowHelp),
+					modulePage(StepModule.class, this::buildStep, this::stepHelp));
+			case COMBAT -> List.of(
+					modulePage(ReachModule.class, this::buildReach, this::reachHelp));
 			case RENDER -> List.of(
 					modulePage(WallhackModule.class, this::buildWallhack, null));
 			case OTHER -> List.of(
@@ -188,6 +193,34 @@ public final class ActestScreen extends Screen {
 		int y = drawWrapped(context, "Скорость ходьбы по земле как без замедления: ваниль при использовании предмета "
 				+ "даёт 0.2 от обычной, песок душ и мёд — 0.4.", footerY, Theme.TEXT_MUTED);
 		drawWrapped(context, "Клавиши по умолчанию нет — включается здесь или назначьте в «Управлении».",
+				y + 4, Theme.TEXT_DISABLED);
+	}
+
+	private void buildStep() {
+		moduleRow(page.module());
+		sliderRow("Высота шага", 0.6, 3.0, 0.1, () -> cfg().step.height, v -> cfg().step.height = v,
+				v -> String.format(Locale.ROOT, "%.1f бл.", v));
+	}
+
+	private void stepHelp(DrawContext context) {
+		int y = drawWrapped(context, "Подъём на блоки без прыжка: 1.0 — полный блок, 2.0 — два блока за один тик.",
+				footerY, Theme.TEXT_MUTED);
+		drawWrapped(context, "Ванильная высота шага 0.6 — ступеньки и полублоки.", y + 4, Theme.TEXT_DISABLED);
+	}
+
+	private void buildReach() {
+		moduleRow(page.module());
+		sliderRow("Атака", 3.0, 8.0, 0.1, () -> cfg().reach.entityRange, v -> cfg().reach.entityRange = v,
+				v -> String.format(Locale.ROOT, "%.1f бл.", v));
+		toggleRow("Блоки тоже", () -> cfg().reach.blocks, v -> cfg().reach.blocks = v);
+		sliderRow("Блоки", 4.5, 8.0, 0.1, () -> cfg().reach.blockRange, v -> cfg().reach.blockRange = v,
+				v -> String.format(Locale.ROOT, "%.1f бл.", v));
+	}
+
+	private void reachHelp(DrawContext context) {
+		int y = drawWrapped(context, "Дальность атаки и взаимодействия с блоками. Ваниль: атака 3.0, блоки 4.5.",
+				footerY, Theme.TEXT_MUTED);
+		drawWrapped(context, "Атака уходит обычным пакетом PlayerInteractEntityC2SPacket — дистанцию проверяет сервер.",
 				y + 4, Theme.TEXT_DISABLED);
 	}
 

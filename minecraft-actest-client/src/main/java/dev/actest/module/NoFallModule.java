@@ -14,10 +14,17 @@ import org.lwjgl.glfw.GLFW;
  *    (см. ClientPlayerEntityMixin → shouldSpoofGround).
  *  - PACKET: обычные пакеты честные, но каждый тик падения дополнительно
  *    отправляется PlayerMoveC2SPacket.OnGroundOnly(true).
+ *
+ * Высоту падения модуль считает сам по координатам между отправками пакетов
+ * (beforeMovementPackets), не полагаясь на клиентский Entity#fallDistance.
  * Срабатывает после FALL_THRESHOLD блоков падения (урон начинается после 3).
  */
 public final class NoFallModule extends AbstractModule {
-	private static final float FALL_THRESHOLD = 2.0f;
+	private static final double FALL_THRESHOLD = 2.0;
+
+	/** Высота, пройденная вниз с последнего касания земли (по координатам). */
+	private double fallen;
+	private double lastY = Double.NaN;
 
 	/** Что модуль сделал на этом тике — читает и сбрасывает лог движения. */
 	private boolean spoofedThisTick;
@@ -32,12 +39,34 @@ public final class NoFallModule extends AbstractModule {
 		return ActestConfig.get().noFall.mode.name();
 	}
 
-	/** Падает ли игрок достаточно долго, чтобы вмешиваться. */
-	private static boolean isFalling(ClientPlayerEntity player) {
-		return !player.isOnGround()
-				&& player.fallDistance > FALL_THRESHOLD
-				&& !player.getAbilities().flying
-				&& !player.isSpectator();
+	@Override
+	protected void onEnable() {
+		fallen = 0;
+		lastY = Double.NaN;
+	}
+
+	/**
+	 * Вызывается из mixin'а в начале sendMovementPackets — уже после движения этого тика.
+	 * Обновляет высоту падения: на земле, в полёте, в воде и на лестнице — обнуляем.
+	 */
+	public void beforeMovementPackets(ClientPlayerEntity player) {
+		double y = player.getY();
+		if (player.isOnGround() || player.getAbilities().flying || player.isTouchingWater()
+				|| player.isInLava() || player.isClimbing() || player.hasVehicle()) {
+			fallen = 0;
+		} else if (!Double.isNaN(lastY) && y < lastY) {
+			fallen += lastY - y;
+		}
+		lastY = y;
+	}
+
+	/** Высота падения для лога движения. */
+	double fallen() {
+		return fallen;
+	}
+
+	private boolean isFalling(ClientPlayerEntity player) {
+		return !player.isOnGround() && fallen > FALL_THRESHOLD && !player.isSpectator();
 	}
 
 	/** Вызывается из mixin'а при сборке каждого пакета движения: подменять ли onGround на true. */

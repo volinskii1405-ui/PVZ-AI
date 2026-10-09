@@ -12,7 +12,8 @@ import java.util.StringJoiner;
  * Лог движения (включается в меню «Прочее → Интерфейс» или debugLog в конфиге).
  * Пишется в конце тика, после отправки пакета движения, поэтому dXZ/dY совпадают с тем,
  * что сервер получил в PlayerMoveC2SPacket этого тика. Пример строки:
- * [Move] age=812 dXZ=0.4209 dY=0.0000 ground=true fall=0.00 using=false nofall=- active=Speed
+ * [Move] age=812 dXZ=0.4209 dY=0.0000 ground=true fall=0.00 nofallFall=0.00 using=false nofall=- active=Speed
+ * (fall — клиентский Entity#fallDistance, nofallFall — высота падения, которую считает NoFall).
  */
 final class MovementLog {
 	private Vec3d lastPos;
@@ -28,9 +29,10 @@ final class MovementLog {
 				}
 			}
 			ActestClient.LOGGER.info(String.format(Locale.ROOT,
-					"[Move] age=%d dXZ=%.4f dY=%.4f ground=%b fall=%.2f using=%b nofall=%s active=%s",
+					"[Move] age=%d dXZ=%.4f dY=%.4f ground=%b fall=%.2f nofallFall=%.2f using=%b nofall=%s active=%s",
 					player.age, Math.hypot(pos.x - lastPos.x, pos.z - lastPos.z), pos.y - lastPos.y,
-					player.isOnGround(), player.fallDistance, player.isUsingItem(), noFallAction, active));
+					player.isOnGround(), player.fallDistance, noFall != null ? noFall.fallen() : 0.0,
+					player.isUsingItem(), noFallAction, active));
 		}
 		lastPos = pos;
 	}

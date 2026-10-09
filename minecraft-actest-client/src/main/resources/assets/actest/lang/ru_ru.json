@@ -5,5 +5,7 @@
   "key.actest.fly": "Вкл/выкл Fly",
   "key.actest.nofall": "Вкл/выкл NoFall",
   "key.actest.noslow": "Вкл/выкл NoSlow",
+  "key.actest.step": "Вкл/выкл Step",
+  "key.actest.reach": "Вкл/выкл Reach",
   "key.actest.menu": "Меню настроек"
 }

@@ -46,6 +46,8 @@ public final class ActestConfig {
 	public Fly fly = new Fly();
 	public NoFall noFall = new NoFall();
 	public NoSlow noSlow = new NoSlow();
+	public Step step = new Step();
+	public Reach reach = new Reach();
 	public Wallhack wallhack = new Wallhack();
 	public Hud hud = new Hud();
 
@@ -83,6 +85,20 @@ public final class ActestConfig {
 		public boolean items = true;
 		/** Без замедления на песке душ и блоке мёда. */
 		public boolean blocks = true;
+	}
+
+	public static final class Step {
+		/** Высота шага в блоках (ванильная 0.6), диапазон 0.6–3.0. */
+		public double height = 1.0;
+	}
+
+	public static final class Reach {
+		/** Дальность атаки (ванильная 3.0), диапазон 3.0–8.0. */
+		public double entityRange = 4.0;
+		/** Увеличивать ли и дальность взаимодействия с блоками. */
+		public boolean blocks = false;
+		/** Дальность взаимодействия с блоками (ванильная 4.5), диапазон 4.5–8.0. */
+		public double blockRange = 6.0;
 	}
 
 	public static final class Wallhack {
@@ -241,6 +257,11 @@ public final class ActestConfig {
 		if (noFall == null) noFall = new NoFall();
 		if (noFall.mode == null) noFall.mode = NoFall.Mode.SPOOF;
 		if (noSlow == null) noSlow = new NoSlow();
+		if (step == null) step = new Step();
+		step.height = clamp(step.height, 0.6, 3.0, 1.0);
+		if (reach == null) reach = new Reach();
+		reach.entityRange = clamp(reach.entityRange, 3.0, 8.0, 4.0);
+		reach.blockRange = clamp(reach.blockRange, 4.5, 8.0, 6.0);
 		if (wallhack == null) wallhack = new Wallhack();
 		if (wallhack.mode == null) wallhack.mode = Wallhack.Mode.GLOW;
 		if (Double.isNaN(wallhack.maxDistance) || wallhack.maxDistance < 1.0) wallhack.maxDistance = 1.0;
