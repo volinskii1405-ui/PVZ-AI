@@ -9,5 +9,9 @@
   "key.actest.reach": "Toggle Reach",
   "key.actest.killaura": "Toggle KillAura",
   "key.actest.autototem": "Toggle AutoTotem",
+  "key.actest.autoclicker": "Toggle AutoClicker",
+  "key.actest.criticals": "Toggle Criticals",
+  "key.actest.velocity": "Toggle Velocity",
+  "key.actest.scaffold": "Toggle Scaffold",
   "key.actest.menu": "Open settings menu"
 }

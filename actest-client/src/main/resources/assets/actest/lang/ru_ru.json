@@ -9,5 +9,9 @@
   "key.actest.reach": "Вкл/выкл Reach",
   "key.actest.killaura": "Вкл/выкл KillAura",
   "key.actest.autototem": "Вкл/выкл AutoTotem",
+  "key.actest.autoclicker": "Вкл/выкл AutoClicker",
+  "key.actest.criticals": "Вкл/выкл Criticals",
+  "key.actest.velocity": "Вкл/выкл Velocity",
+  "key.actest.scaffold": "Вкл/выкл Scaffold",
   "key.actest.menu": "Меню настроек"
 }

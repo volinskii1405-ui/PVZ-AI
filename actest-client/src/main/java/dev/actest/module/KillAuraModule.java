@@ -10,7 +10,6 @@ import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.mob.MobEntity;
 import net.minecraft.entity.mob.Monster;
 import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
 import net.minecraft.util.Hand;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.math.Vec3d;
@@ -71,13 +70,11 @@ public final class KillAuraModule extends AbstractModule {
          return;
       }
 
-      float[] rotation = rotationTo(player.getEyePos(), aimPoint(player.getEyePos(), target.getBoundingBox()));
+      float[] rotation = Rotations.to(player.getEyePos(), aimPoint(player.getEyePos(), target.getBoundingBox()));
       // Углы, которые сервер считает текущими на момент удара (для лога).
       float serverYaw = player.getYaw();
       float serverPitch = player.getPitch();
-      // yaw игрока не нормализован (может быть 1234°) — берём ближайший эквивалентный угол,
-      // чтобы не было ложного скачка на 360° ни в пакете, ни в интерполяции камеры.
-      rotation[0] = player.getYaw() + wrapDegrees(rotation[0] - player.getYaw());
+      rotation[0] = Rotations.continuousYaw(player.getYaw(), rotation[0]);
       if (cfg.rotation == ActestConfig.KillAura.Rotation.CLIENT) {
          // Камера поворачивается на цель; поворот уйдёт на сервер обычным пакетом движения
          // следующего тика, и только ПОСЛЕ этого бьём — как живой игрок «навёлся и кликнул».
@@ -98,7 +95,7 @@ public final class KillAuraModule extends AbstractModule {
       if (cfg.rotation == ActestConfig.KillAura.Rotation.PACKET) {
          // «Тихий» поворот: камера на месте, но прямо перед ударом серверу уходит
          // PlayerMoveC2SPacket.LookAndOnGround с углами на цель.
-         sendLook(player, rotation[0], rotation[1]);
+         Rotations.sendLook(player, rotation[0], rotation[1]);
          this.restoreLook = true;
          serverYaw = rotation[0];
          serverPitch = rotation[1];
@@ -165,8 +162,8 @@ public final class KillAuraModule extends AbstractModule {
             case DISTANCE -> distSq;
             case HEALTH -> living.getHealth();
             case ANGLE -> {
-               float[] rot = rotationTo(eye, aimPoint(eye, living.getBoundingBox()));
-               yield angleBetween(player.getYaw(), player.getPitch(), rot[0], rot[1]);
+               float[] rot = Rotations.to(eye, aimPoint(eye, living.getBoundingBox()));
+               yield Rotations.angleBetween(player.getYaw(), player.getPitch(), rot[0], rot[1]);
             }
          };
          if (score < bestScore) {
@@ -247,43 +244,11 @@ public final class KillAuraModule extends AbstractModule {
       return min > max ? (min + max) / 2.0 : Math.max(min, Math.min(max, value));
    }
 
-   /** Углы yaw/pitch (как у Minecraft: yaw 0 = +Z, pitch вниз положительный), чтобы смотреть из from в to. */
-   private static float[] rotationTo(Vec3d from, Vec3d to) {
-      double dx = to.x - from.x;
-      double dy = to.y - from.y;
-      double dz = to.z - from.z;
-      float yaw = (float)(Math.toDegrees(Math.atan2(dz, dx)) - 90.0);
-      float pitch = (float)(-Math.toDegrees(Math.atan2(dy, Math.sqrt(dx * dx + dz * dz))));
-      return new float[]{yaw, pitch};
-   }
-
-   private static float angleBetween(float yaw1, float pitch1, float yaw2, float pitch2) {
-      float dYaw = Math.abs(wrapDegrees(yaw2 - yaw1));
-      float dPitch = Math.abs(pitch2 - pitch1);
-      return (float)Math.sqrt(dYaw * dYaw + dPitch * dPitch);
-   }
-
-   private static float wrapDegrees(float degrees) {
-      float wrapped = degrees % 360.0F;
-      if (wrapped >= 180.0F) {
-         wrapped -= 360.0F;
-      }
-
-      if (wrapped < -180.0F) {
-         wrapped += 360.0F;
-      }
-
-      return wrapped;
-   }
-
    private void sendRealLookIfNeeded(ClientPlayerEntity player) {
       if (this.restoreLook) {
          this.restoreLook = false;
-         sendLook(player, player.getYaw(), player.getPitch());
+         Rotations.sendLook(player, player.getYaw(), player.getPitch());
       }
    }
 
-   private static void sendLook(ClientPlayerEntity player, float yaw, float pitch) {
-      player.networkHandler.sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(yaw, pitch, player.isOnGround(), player.horizontalCollision));
-   }
 }

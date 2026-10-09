@@ -1,30 +1,34 @@
-# AC Test Client 1.1.0 (Fabric, Minecraft 1.21.4)
+# AC Test Client 1.2.0 (Fabric, Minecraft 1.21.4)
 
 Тестовый клиент для проверки собственного античита. Модули включаются **только** в одиночной игре
 (`allowSingleplayer`) и на серверах из списка `allowedServers` в `config/actest.json` — на любом другом
 сервере клавиши не срабатывают, а уже включённые модули выключаются.
 
-Новое в 1.1.0:
+Новое в 1.2.0: **AutoClicker** (B), **Criticals** (U), **Velocity** (Z) — категория «Бой» в меню,
+**Scaffold** (I) — категория «Движение». Страница «Клавиши» — в две колонки.
 
-- модули **KillAura** и **AutoTotem** (категория «Бой» в меню, клавиши V и Y);
-- их секции `killAura` / `autoTotem` в `config/actest.json` — в конфиг от 1.0.0 они дописываются
-  автоматически со значениями по умолчанию, остальные настройки не трогаются;
-- строки `[KillAura]` и `[AutoTotem]` в `logs/latest.log` при включённом «Логе движения» (`debugLog`).
+Новое в 1.1.0: **KillAura** (V) и **AutoTotem** (Y).
+
+Секции новых модулей дописываются в старый `config/actest.json` автоматически со значениями по
+умолчанию, остальные настройки не трогаются. При включённом «Логе движения» (`debugLog`) каждое
+действие модулей пишется в `logs/latest.log` строками `[KillAura]`, `[AutoTotem]`, `[AutoClicker]`,
+`[Criticals]`, `[Velocity]`, `[Scaffold]` — рядом со строками `[Move]`.
 
 ## Установка
 
 1. Fabric Loader 0.16+ для 1.21.4 и Fabric API.
-2. Положить `release/actest-client-1.1.0.jar` в `.minecraft/mods/` (старый `actest-client-1.0.0.jar` удалить).
+2. Положить `release/actest-client-1.2.0.jar` в `.minecraft/mods/` (старые версии `actest-client-*.jar` удалить).
 3. Запустить игру, добавить адрес тестового сервера в `allowedServers` (как в списке серверов, с портом
    или без) — конфиг перечитывается сам раз в секунду, перезапуск не нужен.
 
-| Модуль    | Клавиша     | Модуль    | Клавиша     |
-|-----------|-------------|-----------|-------------|
-| Speed     | R           | Reach     | K           |
-| Fly       | G           | KillAura  | V           |
-| NoFall    | N           | AutoTotem | Y           |
-| NoSlow    | — (в меню)  | WH (ESP)  | H           |
-| Step      | J           | Меню      | Right Shift |
+| Движение | Клавиша    | Бой         | Клавиша | Прочее   | Клавиша     |
+|----------|------------|-------------|---------|----------|-------------|
+| Speed    | R          | Reach       | K       | WH (ESP) | H           |
+| Fly      | G          | KillAura    | V       | Меню     | Right Shift |
+| NoFall   | N          | AutoClicker | B       |          |             |
+| NoSlow   | — (в меню) | Criticals   | U       |          |             |
+| Step     | J          | Velocity    | Z       |          |             |
+| Scaffold | I          | AutoTotem   | Y       |          |             |
 
 Переназначить: Настройки → Управление → AC Test Client.
 
@@ -36,8 +40,11 @@ module/Module           общий интерфейс: getName, toggle, onTick, 
 module/AbstractModule   имя + клавиша + флаг включения (onEnable/onDisable)
 module/ModuleManager    регистрация модулей, клавиши, тик/рендер, отключение вне allowedServers
 module/ServerGuard      проверка singleplayer / allowedServers
-module/*Module          Speed, Fly, NoFall, NoSlow, Step, Reach, KillAura, AutoTotem, Wallhack
-mixin/*                 NoFall (onGround в sendMovementPackets), WH (контур glowing и его цвет)
+module/*Module          Speed, Fly, NoFall, NoSlow, Step, Scaffold, Reach, KillAura, AutoClicker,
+                        Criticals, Velocity, AutoTotem, Wallhack
+module/Rotations        углы на точку, нормализация yaw, «тихий» поворот пакетом (KillAura, Scaffold)
+mixin/*                 NoFall (onGround в sendMovementPackets), WH (контур glowing и его цвет),
+                        Velocity (onEntityVelocityUpdate / onExplosion), Criticals (attackEntity)
 config/ActestConfig     config/actest.json (Gson), автоперечитывание при изменении файла
 gui/ActestScreen        меню настроек; render/ModuleListHud — HUD-список включённых модулей
 ```
@@ -45,7 +52,7 @@ gui/ActestScreen        меню настроек; render/ModuleListHud — HUD-
 Новый модуль = класс `extends AbstractModule` + строка `register(new ...)` в `ModuleManager`
 (+ при желании секция в `ActestConfig` и страница в `ActestScreen`).
 
-## Новые секции конфига
+## Секции конфига новых модулей
 
 ```json
 "killAura": {
@@ -63,12 +70,34 @@ gui/ActestScreen        меню настроек; render/ModuleListHud — HUD-
   "health": 10.0,          // порог для HEALTH: здоровье + поглощение, в HP
   "method": "SWAP",        // SWAP (1 клик, как F) | PICKUP (2–3 клика)
   "delay": 0               // 0–20 тиков после того, как тотем пропал из второй руки
+},
+"autoClicker": {
+  "left": true, "right": false,  // какие кнопки кликать
+  "minCps": 8.0, "maxCps": 12.0, // 1–30; перед каждым кликом — случайный CPS из диапазона
+  "holdOnly": true,              // кликать только пока кнопка зажата; false — всё время
+  "ignoreBlocks": true           // не кликать ЛКМ, когда прицел на блоке (не сбивать копание)
+},
+"criticals": {
+  "height": 0.0625,        // 0.0125–0.5, высота «подскока» в первом пакете
+  "onlyWhenCharged": true  // только для удара, заряженного ≥ 90%
+},
+"velocity": {
+  "horizontal": 0.0,       // 0–100 % отбрасывания по горизонтали (0 — не сдвигаться совсем)
+  "vertical": 0.0,         // 0–100 % по вертикали
+  "explosions": true       // ослаблять и взрывы / заряды ветра
+},
+"scaffold": {
+  "rotation": "PACKET",    // NONE | PACKET
+  "delay": 0,              // 0–10 тиков между установками
+  "switchBack": true,      // вернуть выбранный слот хотбара
+  "swing": true            // взмах рукой после установки
 }
 ```
 
 KillAura не бьёт игроков в креативе/спектаторе, стойки для брони и прочие не-мобы, а также пока открыт
 любой экран (чат, инвентарь, меню). AutoTotem не работает в креативе, при открытом сундуке/другом
-контейнере и когда в курсоре мыши есть предмет.
+контейнере и когда в курсоре мыши есть предмет. AutoClicker и Scaffold не работают при открытом экране.
+Criticals срабатывает на любой удар — ручной, KillAura и AutoClicker.
 
 ## Что получает сервер (для сверки с логами античита)
 
@@ -118,6 +147,73 @@ KillAura не бьёт игроков в креативе/спектаторе, 
 
 `waited` — сколько тиков модуль ждал перед кликом (настройка `delay`).
 
+### AutoClicker
+
+Клик эмулируется через `KeyBinding.onKeyPressed()` — так же, как игра регистрирует нажатие мыши,
+поэтому дальше всё ванильное: на следующем тике ЛКМ превращается в `PlayerInteractEntityC2SPacket`
+(ATTACK) + `HandSwingC2SPacket`, в `PlayerActionC2SPacket` (START_DESTROY_BLOCK) по блоку или в
+взмах при промахе (с ванильным штрафом 10 тиков); ПКМ — в `PlayerInteractItemC2SPacket` /
+`PlayerInteractBlockC2SPacket`. Клики обрабатываются в начале тика, до пакета движения.
+
+Что можно ловить: CPS выше человеческого, до 2 кликов в одном тике при CPS > 20; распределение
+интервалов — равномерное в диапазоне CPS (нет «человеческих» выбросов и двойных кликов, разброс
+ограничен `minCps`/`maxCps`); при `holdOnly: false` — клики без зажатой кнопки. Средний CPS чуть ниже
+середины диапазона (для 8–12 ≈ 9.9).
+
+```
+[AutoClicker] age=3120 button=L clicks=1
+```
+
+### Criticals
+
+Перед каждым ударом, в том же тике и прямо перед `PlayerInteractEntityC2SPacket`, уходят два
+`PlayerMoveC2SPacket.PositionAndOnGround` с текущими x/z: `y + height, onGround=false`, затем
+`y, onGround=false`. Пакеты шлются, только если игрок на земле, не в воде/лаве, не на лестнице, не верхом
+и не в спринте (там ванилла крит не даёт), а при `onlyWhenCharged` — если удар заряжен ≥ 90%.
+
+Что можно ловить: два лишних пакета позиции в тике перед атакой; «подскок» на `height` без прыжка
+(нет вертикальной скорости 0.42); `onGround=false`, хотя под игроком блок; крит (сервер сам шлёт
+`EntityAnimationS2CPacket` CRIT) у игрока, стоящего на земле. После этого сервер считает игрока
+«в воздухе», пока не придёт следующий обычный пакет движения.
+
+```
+[Criticals] age=1834 target=Steve y=64.0000 height=0.0625
+```
+
+### Velocity
+
+Сервер шлёт обычное отбрасывание — `EntityVelocityUpdateS2CPacket` для игрока (удары, стрелы) и поле
+`playerKnockback` в `ExplosionS2CPacket` (взрывы, заряды ветра). Клиент сразу после применения
+уменьшает эту скорость до `horizontal` / `vertical` %. Лишних пакетов на сервер не уходит — меняются только
+следующие пакеты движения.
+
+Что можно ловить: после отправленной скорости (или взрыва рядом) игрок в следующих тиках смещается
+меньше ожидаемого или совсем не смещается (при 0% `dXZ` и `dY` в `[Move]` такие же, как без удара).
+
+```
+[Velocity] age=2051 source=packet server=(0.3820, 0.3608, -0.1204) applied=(0.0000, 0.0000, -0.0000)
+```
+
+`server` — скорость, которую прислал сервер; `applied` — что осталось после модуля.
+
+### Scaffold
+
+Каждый тик, если блок под ногами пуст, а рядом есть опора (снизу или сбоку), модуль кликает по грани
+соседнего блока — `PlayerInteractBlockC2SPacket` (MAIN_HAND, позиция соседа, грань, точка клика — центр
+грани), затем `HandSwingC2SPacket`. Если блок не в текущем слоте, перед этим уходит
+`UpdateSelectedSlotC2SPacket`, а со `switchBack` — ещё один на следующем тике (возврат слота).
+С `rotation: PACKET` прямо перед установкой уходит `LookAndOnGround` на точку клика, а на тике без
+установки — обратно на настоящий взгляд.
+
+Что можно ловить: установка блока под себя, пока игрок стоит/идёт на краю; темп установки (блок
+каждый тик при `delay: 0`); при `rotation: NONE` — клик по грани, на которую игрок не смотрит;
+рывки поворота «вниз и обратно» при `PACKET`; переключение слота туда-обратно вокруг установки;
+«тауэр» вверх в прыжке.
+
+```
+[Scaffold] age=4410 pos=12,63,-40 against=up slot=0->3 placed=true rot=PACKET yaw=-12.40 pitch=81.95
+```
+
 ### Остальные модули (кратко)
 
 - **Speed**: увеличенное горизонтальное смещение в пакетах движения (`dXZ` в `[Move]`); BHOP —
@@ -138,20 +234,22 @@ KillAura не бьёт игроков в креативе/спектаторе, 
 ./gradlew build          # Windows: gradlew.bat build
 ```
 
-Готовый мод — `build/libs/actest-client-1.1.0.jar`. Если Gradle не найдёт версию Yarn или Fabric API
+Готовый мод — `build/libs/actest-client-1.2.0.jar`. Если Gradle не найдёт версию Yarn или Fabric API
 из `gradle.properties`, возьмите актуальные для 1.21.4 на https://fabricmc.net/develop.
 
-## Как собран `release/actest-client-1.1.0.jar`
+## Как собран `release/actest-client-1.2.0.jar`
 
 Исходников 1.0.0 не было — только jar, поэтому `src/` восстановлен декомпиляцией 1.0.0 (Vineflower)
 с переводом имён в Yarn 1.21.4; комментарии в старых классах добавлены заново. В среде, где делалась
-1.1.0, не было доступа к Maven Fabric и серверам Mojang, поэтому Loom запустить не удалось, и jar
-собран так:
+1.1.0 и 1.2.0, не было доступа к Maven Fabric и серверам Mojang, поэтому Loom запустить не удалось,
+и jar собран так:
 
-- все классы 1.0.0, включая миксины и refmap, оставлены байт-в-байт;
-- заново скомпилированы только `ModuleManager`, `ActestConfig`, `ActestScreen` и новые
-  `KillAuraModule` / `AutoTotemModule` — javac против заглушек Minecraft API, сгенерированных из маппингов
-  Yarn 1.21.4 (имена intermediary, как в рантайме);
+- все классы 1.0.0, включая старые миксины, оставлены байт-в-байт;
+- заново скомпилированы только `ModuleManager`, `ActestConfig`, `ActestScreen`, новые модули и два новых
+  миксина — javac против заглушек Minecraft API, сгенерированных из маппингов Yarn 1.21.4 (имена
+  intermediary, как в рантайме);
+- в refmap вручную добавлены записи для новых миксинов в том же формате, что генерирует Loom
+  (`onEntityVelocityUpdate`, `onExplosion`, `attackEntity` → intermediary-имена с дескрипторами);
 - каждая ссылка на Minecraft в новом байткоде сверена с маппингами (имя + дескриптор), а ссылки в
   перекомпилированных старых классах — с байткодом 1.0.0.
 

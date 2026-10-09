@@ -6,7 +6,9 @@
   "client": [
     "ClientPlayerEntityMixin",
     "EntityMixin",
-    "MinecraftClientMixin"
+    "MinecraftClientMixin",
+    "ClientPlayNetworkHandlerMixin",
+    "ClientPlayerInteractionManagerMixin"
   ],
   "injectors": {
     "defaultRequire": 1

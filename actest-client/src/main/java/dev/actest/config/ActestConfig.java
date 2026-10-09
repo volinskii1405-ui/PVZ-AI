@@ -24,6 +24,8 @@ import net.fabricmc.loader.api.FabricLoader;
 public final class ActestConfig {
    private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
    private static final Path PATH = FabricLoader.getInstance().getConfigDir().resolve("actest.json");
+   /** Секции, появившиеся после 1.0.0: если какой-то нет в файле, конфиг дописывается значениями по умолчанию. */
+   private static final List<String> NEWER_SECTIONS = List.of("killAura", "autoTotem", "autoClicker", "criticals", "velocity", "scaffold");
    private static ActestConfig instance = new ActestConfig();
    private static long lastModified = Long.MIN_VALUE;
    public List<String> allowedServers = new ArrayList<>(List.of("localhost", "127.0.0.1"));
@@ -38,6 +40,10 @@ public final class ActestConfig {
    public ActestConfig.Wallhack wallhack = new ActestConfig.Wallhack();
    public ActestConfig.KillAura killAura = new ActestConfig.KillAura();
    public ActestConfig.AutoTotem autoTotem = new ActestConfig.AutoTotem();
+   public ActestConfig.AutoClicker autoClicker = new ActestConfig.AutoClicker();
+   public ActestConfig.Criticals criticals = new ActestConfig.Criticals();
+   public ActestConfig.Velocity velocity = new ActestConfig.Velocity();
+   public ActestConfig.Scaffold scaffold = new ActestConfig.Scaffold();
    public ActestConfig.Hud hud = new ActestConfig.Hud();
 
    public static ActestConfig get() {
@@ -92,8 +98,8 @@ public final class ActestConfig {
          JsonElement json = JsonParser.parseReader(reader);
          if (json.isJsonObject()) {
             JsonObject object = json.getAsJsonObject();
-            // Конфиг от версии 1.0.0: секций новых модулей ещё нет — допишем их со значениями по умолчанию.
-            missingSections = !object.has("killAura") || !object.has("autoTotem");
+            // Конфиг от старой версии: секций новых модулей ещё нет — допишем их со значениями по умолчанию.
+            missingSections = NEWER_SECTIONS.stream().anyMatch(section -> !object.has(section));
             loaded = (ActestConfig)GSON.fromJson(object, ActestConfig.class);
          }
       } catch (JsonParseException | IllegalStateException | IOException e) {
@@ -109,7 +115,7 @@ public final class ActestConfig {
       instance = loaded;
       if (missingSections) {
          save();
-         ActestClient.LOGGER.info("В {} добавлены секции killAura и autoTotem", PATH);
+         ActestClient.LOGGER.info("В {} добавлены секции новых модулей", PATH);
       }
 
       return true;
@@ -212,6 +218,38 @@ public final class ActestConfig {
 
       this.autoTotem.health = clamp(this.autoTotem.health, 1.0, 20.0, 10.0);
       this.autoTotem.delay = Math.max(0, Math.min(20, this.autoTotem.delay));
+      if (this.autoClicker == null) {
+         this.autoClicker = new ActestConfig.AutoClicker();
+      }
+
+      this.autoClicker.minCps = clamp(this.autoClicker.minCps, 1.0, 30.0, 8.0);
+      this.autoClicker.maxCps = clamp(this.autoClicker.maxCps, 1.0, 30.0, 12.0);
+      if (this.autoClicker.minCps > this.autoClicker.maxCps) {
+         double swap = this.autoClicker.minCps;
+         this.autoClicker.minCps = this.autoClicker.maxCps;
+         this.autoClicker.maxCps = swap;
+      }
+
+      if (this.criticals == null) {
+         this.criticals = new ActestConfig.Criticals();
+      }
+
+      this.criticals.height = clamp(this.criticals.height, 0.0125, 0.5, 0.0625);
+      if (this.velocity == null) {
+         this.velocity = new ActestConfig.Velocity();
+      }
+
+      this.velocity.horizontal = clamp(this.velocity.horizontal, 0.0, 100.0, 0.0);
+      this.velocity.vertical = clamp(this.velocity.vertical, 0.0, 100.0, 0.0);
+      if (this.scaffold == null) {
+         this.scaffold = new ActestConfig.Scaffold();
+      }
+
+      if (this.scaffold.rotation == null) {
+         this.scaffold.rotation = ActestConfig.Scaffold.Rotation.PACKET;
+      }
+
+      this.scaffold.delay = Math.max(0, Math.min(10, this.scaffold.delay));
       if (this.hud == null) {
          this.hud = new ActestConfig.Hud();
       }
@@ -303,6 +341,56 @@ public final class ActestConfig {
       public static enum Method {
          SWAP,
          PICKUP;
+      }
+   }
+
+   /** Настройки AutoClicker. */
+   public static final class AutoClicker {
+      /** Кликать ЛКМ (атака / удар по блоку). */
+      public boolean left = true;
+      /** Кликать ПКМ (использование предмета / установка блока). */
+      public boolean right = false;
+      /** CPS выбирается случайно в [minCps, maxCps] для каждого клика (1–30). */
+      public double minCps = 8.0;
+      public double maxCps = 12.0;
+      /** true — кликать, только пока кнопка зажата; false — всё время, пока модуль включён. */
+      public boolean holdOnly = true;
+      /** Не кликать ЛКМ, когда прицел на блоке, — чтобы не сбивать копание. */
+      public boolean ignoreBlocks = true;
+   }
+
+   /** Настройки Criticals. */
+   public static final class Criticals {
+      /** Высота «подскока» в первом пакете позиции, блоков (0.0125–0.5). */
+      public double height = 0.0625;
+      /** Слать пакеты, только когда удар заряжен > 90% (иначе ванилла крит всё равно не даст). */
+      public boolean onlyWhenCharged = true;
+   }
+
+   /** Настройки Velocity. */
+   public static final class Velocity {
+      /** Сколько процентов отбрасывания оставить по горизонтали (0 — совсем без отбрасывания). */
+      public double horizontal = 0.0;
+      /** Сколько процентов отбрасывания оставить по вертикали. */
+      public double vertical = 0.0;
+      /** Ослаблять и отбрасывание от взрывов / зарядов ветра. */
+      public boolean explosions = true;
+   }
+
+   /** Настройки Scaffold. */
+   public static final class Scaffold {
+      /** NONE — без поворота, PACKET — перед установкой серверу уходит взгляд на точку клика. */
+      public ActestConfig.Scaffold.Rotation rotation = ActestConfig.Scaffold.Rotation.PACKET;
+      /** Пауза между установками, тиков (0–10). */
+      public int delay = 0;
+      /** Вернуть выбранный слот хотбара после установки. */
+      public boolean switchBack = true;
+      /** Взмах рукой после успешной установки, как ванилла. */
+      public boolean swing = true;
+
+      public static enum Rotation {
+         NONE,
+         PACKET;
       }
    }
 

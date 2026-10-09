@@ -10,7 +10,9 @@ import dev.actest.gui.widget.Slider;
 import dev.actest.gui.widget.TabButton;
 import dev.actest.gui.widget.ToggleSwitch;
 import dev.actest.gui.widget.TopTab;
+import dev.actest.module.AutoClickerModule;
 import dev.actest.module.AutoTotemModule;
+import dev.actest.module.CriticalsModule;
 import dev.actest.module.FlyModule;
 import dev.actest.module.KillAuraModule;
 import dev.actest.module.Module;
@@ -18,8 +20,10 @@ import dev.actest.module.ModuleManager;
 import dev.actest.module.NoFallModule;
 import dev.actest.module.NoSlowModule;
 import dev.actest.module.ReachModule;
+import dev.actest.module.ScaffoldModule;
 import dev.actest.module.SpeedModule;
 import dev.actest.module.StepModule;
+import dev.actest.module.VelocityModule;
 import dev.actest.module.WallhackModule;
 import java.util.ArrayList;
 import java.util.List;
@@ -83,11 +87,15 @@ public final class ActestScreen extends Screen {
          this.modulePage(FlyModule.class, this::buildFly, this::flyHelp),
          this.modulePage(NoFallModule.class, this::buildNoFall, this::noFallHelp),
          this.modulePage(NoSlowModule.class, this::buildNoSlow, this::noSlowHelp),
-         this.modulePage(StepModule.class, this::buildStep, this::stepHelp)
+         this.modulePage(StepModule.class, this::buildStep, this::stepHelp),
+         this.modulePage(ScaffoldModule.class, this::buildScaffold, this::scaffoldHelp)
       );
          case COMBAT -> List.of(
          this.modulePage(ReachModule.class, this::buildReach, this::reachHelp),
          this.modulePage(KillAuraModule.class, this::buildKillAura, this::killAuraHelp),
+         this.modulePage(AutoClickerModule.class, this::buildAutoClicker, this::autoClickerHelp),
+         this.modulePage(CriticalsModule.class, this::buildCriticals, this::criticalsHelp),
+         this.modulePage(VelocityModule.class, this::buildVelocity, this::velocityHelp),
          this.modulePage(AutoTotemModule.class, this::buildAutoTotem, this::autoTotemHelp)
       );
          case RENDER -> List.of(this.modulePage(WallhackModule.class, this::buildWallhack, null));
@@ -250,6 +258,91 @@ public final class ActestScreen extends Screen {
       this.drawWrapped(context, text, this.footerY, 0xFF8B93A3);
    }
 
+   private void buildAutoClicker() {
+      this.moduleRow(this.page.module());
+      int y = this.pillRowY("Кнопки");
+      this.placePills(
+         new PillToggle(0, y, 14, "ЛКМ", () -> cfg().autoClicker.left, v -> cfg().autoClicker.left = v),
+         new PillToggle(0, y, 14, "ПКМ", () -> cfg().autoClicker.right, v -> cfg().autoClicker.right = v)
+      );
+      this.sliderRow("Мин. CPS", 1.0, 30.0, 1.0, () -> cfg().autoClicker.minCps, v -> cfg().autoClicker.minCps = v, v -> String.format(Locale.ROOT, "%.0f", v));
+      this.sliderRow("Макс. CPS", 1.0, 30.0, 1.0, () -> cfg().autoClicker.maxCps, v -> cfg().autoClicker.maxCps = v, v -> String.format(Locale.ROOT, "%.0f", v));
+      this.toggleRow("Только пока зажата", () -> cfg().autoClicker.holdOnly, v -> cfg().autoClicker.holdOnly = v)
+         .setTooltip(Tooltip.of(Text.literal("Выкл — кликает всё время, пока модуль включён")));
+      this.toggleRow("Не мешать копанию", () -> cfg().autoClicker.ignoreBlocks, v -> cfg().autoClicker.ignoreBlocks = v)
+         .setTooltip(Tooltip.of(Text.literal("Не кликать ЛКМ, когда прицел на блоке")));
+   }
+
+   private void autoClickerHelp(DrawContext context) {
+      int y = this.drawWrapped(
+         context, "Интервал между кликами случайный: от 1/макс. до 1/мин. CPS. Клик обрабатывает сама игра, как настоящий.", this.footerY, 0xFF8B93A3
+      );
+      this.drawWrapped(context, "ПКМ при зажатой кнопке ванилла и так повторяет ~5 раз/с — клики добавляются сверху.", y + 4, 0xFF586070);
+   }
+
+   private void buildCriticals() {
+      this.moduleRow(this.page.module());
+      this.sliderRow(
+         "Высота", 0.0125, 0.5, 0.0125, () -> cfg().criticals.height, v -> cfg().criticals.height = v, v -> String.format(Locale.ROOT, "%.4f", v)
+      );
+      this.toggleRow("Только заряженный удар", () -> cfg().criticals.onlyWhenCharged, v -> cfg().criticals.onlyWhenCharged = v)
+         .setTooltip(Tooltip.of(Text.literal("Ванилла критует только удар, заряженный больше чем на 90%")));
+   }
+
+   private void criticalsHelp(DrawContext context) {
+      int y = this.drawWrapped(
+         context, "Перед ударом уходят 2 пакета позиции: y + высота и снова y, оба с onGround=false — сервер видит «падение».", this.footerY, 0xFF8B93A3
+      );
+      this.drawWrapped(context, "Не срабатывает в спринте, в воде и лаве, на лестнице и верхом — там ванилла крит не даёт.", y + 4, 0xFF586070);
+   }
+
+   private void buildVelocity() {
+      this.moduleRow(this.page.module());
+      this.sliderRow(
+         "По горизонтали", 0.0, 100.0, 5.0, () -> cfg().velocity.horizontal, v -> cfg().velocity.horizontal = v, v -> String.format(Locale.ROOT, "%.0f%%", v)
+      );
+      this.sliderRow(
+         "По вертикали", 0.0, 100.0, 5.0, () -> cfg().velocity.vertical, v -> cfg().velocity.vertical = v, v -> String.format(Locale.ROOT, "%.0f%%", v)
+      );
+      this.toggleRow("Взрывы и ветер", () -> cfg().velocity.explosions, v -> cfg().velocity.explosions = v);
+   }
+
+   private void velocityHelp(DrawContext context) {
+      int y = this.drawWrapped(context, "Сколько отбрасывания оставить: 0% — игрок не сдвигается, 100% — как в ванилле.", this.footerY, 0xFF8B93A3);
+      this.drawWrapped(context, "Сервер шлёт обычный EntityVelocityUpdate / Explosion — меняется только реакция клиента.", y + 4, 0xFF586070);
+   }
+
+   private void buildScaffold() {
+      this.moduleRow(this.page.module());
+      this.segmentedRow(
+         "Поворот",
+         120,
+         ActestConfig.Scaffold.Rotation.values(),
+         rotation -> rotation == ActestConfig.Scaffold.Rotation.NONE ? "Нет" : "Пакет",
+         () -> cfg().scaffold.rotation,
+         rotation -> cfg().scaffold.rotation = rotation
+      );
+      this.sliderRow(
+         "Задержка",
+         0.0,
+         10.0,
+         1.0,
+         () -> (double)cfg().scaffold.delay,
+         v -> cfg().scaffold.delay = (int)Math.round(v),
+         v -> String.format(Locale.ROOT, "%.0f тик.", v)
+      );
+      this.toggleRow("Вернуть слот", () -> cfg().scaffold.switchBack, v -> cfg().scaffold.switchBack = v)
+         .setTooltip(Tooltip.of(Text.literal("После установки вернуть слот хотбара, который был выбран")));
+      this.toggleRow("Взмах рукой", () -> cfg().scaffold.swing, v -> cfg().scaffold.swing = v);
+   }
+
+   private void scaffoldHelp(DrawContext context) {
+      int y = this.drawWrapped(
+         context, "Ставит блок из хотбара под ноги кликом по грани соседнего блока (снизу или сбоку).", this.footerY, 0xFF8B93A3
+      );
+      this.drawWrapped(context, "В прыжке строит вверх. Нужен полный блок в хотбаре.", y + 4, 0xFF586070);
+   }
+
    private void buildAutoTotem() {
       this.moduleRow(this.page.module());
       this.segmentedRow(
@@ -380,14 +473,29 @@ public final class ActestScreen extends Screen {
    }
 
    private void keysHelp(DrawContext context) {
-      int y = this.nextRowY + 2;
+      // Две колонки: модулей больше, чем помещается строк на странице.
+      List<Module> all = this.modules.all();
+      int total = all.size() + 1;
+      int perColumn = (total + 1) / 2;
+      int middle = (this.contentX + this.contentRight) / 2;
+      int top = this.nextRowY + 2;
+      int bottom = top;
 
-      for (Module module : this.modules.all()) {
-         y = this.drawKeyLine(context, module.getName(), module.getKeyBinding(), y);
+      for (int i = 0; i < total; i++) {
+         boolean leftColumn = i < perColumn;
+         int x1 = leftColumn ? this.contentX : middle + 6;
+         int x2 = leftColumn ? middle - 6 : this.contentRight;
+         int y = top + (leftColumn ? i : i - perColumn) * 14;
+         if (i < all.size()) {
+            this.drawKeyLine(context, all.get(i).getName(), all.get(i).getKeyBinding(), x1, x2, y);
+         } else {
+            this.drawKeyLine(context, "Меню", this.modules.getMenuKey(), x1, x2, y);
+         }
+
+         bottom = Math.max(bottom, y + 14);
       }
 
-      y = this.drawKeyLine(context, "Это меню", this.modules.getMenuKey(), y);
-      this.drawWrapped(context, "Переназначить: Настройки → Управление → AC Test Client.", y + 2, 0xFF586070);
+      this.drawWrapped(context, "Переназначить: Настройки → Управление → AC Test Client.", bottom + 2, 0xFF586070);
    }
 
    protected void init() {
@@ -572,12 +680,12 @@ public final class ActestScreen extends Screen {
       context.drawText(this.textRenderer, this.textRenderer.trimToWidth(where, maxWidth - 9), x + 9, y, 0xFF8B93A3, false);
    }
 
-   private int drawKeyLine(DrawContext context, String name, KeyBinding key, int y) {
-      context.drawText(this.textRenderer, name, this.contentX, y, 0xFFE6E9EF, false);
+   private int drawKeyLine(DrawContext context, String name, KeyBinding key, int x1, int x2, int y) {
+      context.drawText(this.textRenderer, name, x1, y, 0xFFE6E9EF, false);
       Text keyName = (Text)(key.isUnbound() ? Text.literal("—") : key.getBoundKeyLocalizedText());
       int w = this.textRenderer.getWidth(keyName) + 8;
-      Theme.roundRect(context, this.contentRight - w, y - 2, this.contentRight, y + 10, 2, 0xFF272E3B);
-      context.drawText(this.textRenderer, keyName, this.contentRight - w + 4, y, 0xFFE6E9EF, false);
+      Theme.roundRect(context, x2 - w, y - 2, x2, y + 10, 2, 0xFF272E3B);
+      context.drawText(this.textRenderer, keyName, x2 - w + 4, y, 0xFFE6E9EF, false);
       return y + 14;
    }
 
