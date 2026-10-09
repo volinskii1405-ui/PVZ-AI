@@ -8,7 +8,9 @@
     "EntityMixin",
     "MinecraftClientMixin",
     "ClientPlayNetworkHandlerMixin",
-    "ClientPlayerInteractionManagerMixin"
+    "ClientPlayerInteractionManagerMixin",
+    "ClientCommonNetworkHandlerMixin",
+    "AbstractBlockStateMixin"
   ],
   "injectors": {
     "defaultRequire": 1

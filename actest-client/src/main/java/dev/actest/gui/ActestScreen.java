@@ -12,8 +12,12 @@ import dev.actest.gui.widget.ToggleSwitch;
 import dev.actest.gui.widget.TopTab;
 import dev.actest.module.AutoClickerModule;
 import dev.actest.module.AutoTotemModule;
+import dev.actest.module.BlinkModule;
+import dev.actest.module.ChestStealerModule;
 import dev.actest.module.CriticalsModule;
+import dev.actest.module.FastBreakModule;
 import dev.actest.module.FlyModule;
+import dev.actest.module.JesusModule;
 import dev.actest.module.KillAuraModule;
 import dev.actest.module.Module;
 import dev.actest.module.ModuleManager;
@@ -88,7 +92,13 @@ public final class ActestScreen extends Screen {
          this.modulePage(NoFallModule.class, this::buildNoFall, this::noFallHelp),
          this.modulePage(NoSlowModule.class, this::buildNoSlow, this::noSlowHelp),
          this.modulePage(StepModule.class, this::buildStep, this::stepHelp),
-         this.modulePage(ScaffoldModule.class, this::buildScaffold, this::scaffoldHelp)
+         this.modulePage(JesusModule.class, this::buildJesus, this::jesusHelp),
+         this.modulePage(BlinkModule.class, this::buildBlink, this::blinkHelp)
+      );
+         case WORLD -> List.of(
+         this.modulePage(ScaffoldModule.class, this::buildScaffold, this::scaffoldHelp),
+         this.modulePage(FastBreakModule.class, this::buildFastBreak, this::fastBreakHelp),
+         this.modulePage(ChestStealerModule.class, this::buildChestStealer, this::chestStealerHelp)
       );
          case COMBAT -> List.of(
          this.modulePage(ReachModule.class, this::buildReach, this::reachHelp),
@@ -341,6 +351,95 @@ public final class ActestScreen extends Screen {
          context, "Ставит блок из хотбара под ноги кликом по грани соседнего блока (снизу или сбоку).", this.footerY, 0xFF8B93A3
       );
       this.drawWrapped(context, "В прыжке строит вверх. Нужен полный блок в хотбаре.", y + 4, 0xFF586070);
+   }
+
+   private void buildJesus() {
+      this.moduleRow(this.page.module());
+      this.toggleRow("Лава тоже", () -> cfg().jesus.lava, v -> cfg().jesus.lava = v);
+      this.toggleRow("Всплывать", () -> cfg().jesus.swimUp, v -> cfg().jesus.swimUp = v)
+         .setTooltip(Tooltip.of(Text.literal("Если игрок уже в жидкости — выталкивать его к поверхности")));
+   }
+
+   private void jesusHelp(DrawContext context) {
+      int y = this.drawWrapped(
+         context, "Вода и лава твёрдые сверху: ходьба по поверхности обычной наземной физикой, в пакетах onGround=true.", this.footerY, 0xFF8B93A3
+      );
+      this.drawWrapped(context, "Присесть (Shift) — нырнуть. Блоки с водой внутри (waterlogged) не затрагиваются.", y + 4, 0xFF586070);
+   }
+
+   private void buildBlink() {
+      this.moduleRow(this.page.module());
+      this.sliderRow(
+         "Пульс",
+         0.0,
+         100.0,
+         5.0,
+         () -> (double)cfg().blink.releaseTicks,
+         v -> cfg().blink.releaseTicks = (int)Math.round(v),
+         v -> v < 1.0 ? "выкл" : String.format(Locale.ROOT, "%.0f тик.", v)
+      );
+      this.sliderRow(
+         "Максимум",
+         20.0,
+         1200.0,
+         20.0,
+         () -> (double)cfg().blink.maxTicks,
+         v -> cfg().blink.maxTicks = (int)Math.round(v),
+         v -> String.format(Locale.ROOT, "%.0f с", v / 20.0)
+      );
+   }
+
+   private void blinkHelp(DrawContext context) {
+      int y = this.drawWrapped(
+         context, "Пакеты движения копятся и уходят пачкой при выключении (или каждые «Пульс» тиков). Для сервера игрок стоит на месте.", this.footerY, 0xFF8B93A3
+      );
+      this.drawWrapped(context, "«Максимум» — через сколько модуль выключится сам. Телепорт от сервера во время Blink даст откат.", y + 4, 0xFF586070);
+   }
+
+   private void buildFastBreak() {
+      this.moduleRow(this.page.module());
+      this.sliderRow(
+         "Ломать при", 0.0, 1.0, 0.05, () -> cfg().fastBreak.breakAt, v -> cfg().fastBreak.breakAt = v, v -> String.format(Locale.ROOT, "%.0f%%", v * 100.0)
+      );
+      this.toggleRow("Без паузы между блоками", () -> cfg().fastBreak.noDelay, v -> cfg().fastBreak.noDelay = v)
+         .setTooltip(Tooltip.of(Text.literal("Ванилла ждёт 5 тиков, прежде чем начать ломать следующий блок")));
+   }
+
+   private void fastBreakHelp(DrawContext context) {
+      int y = this.drawWrapped(
+         context, "Блок «доламывается», как только ванильный прогресс дошёл до заданной доли. 100% — как в ванилле.", this.footerY, 0xFF8B93A3
+      );
+      this.drawWrapped(context, "Ванильный сервер принимает поломку с 70%; раньше — сам доломает блок по полному времени.", y + 4, 0xFF586070);
+   }
+
+   private void buildChestStealer() {
+      this.moduleRow(this.page.module());
+      this.sliderRow(
+         "Задержка",
+         0.0,
+         10.0,
+         1.0,
+         () -> (double)cfg().chestStealer.delay,
+         v -> cfg().chestStealer.delay = (int)Math.round(v),
+         v -> String.format(Locale.ROOT, "%.0f тик.", v)
+      );
+      this.sliderRow(
+         "Старт",
+         0.0,
+         20.0,
+         1.0,
+         () -> (double)cfg().chestStealer.startDelay,
+         v -> cfg().chestStealer.startDelay = (int)Math.round(v),
+         v -> String.format(Locale.ROOT, "%.0f тик.", v)
+      );
+      this.toggleRow("Закрыть после", () -> cfg().chestStealer.autoClose, v -> cfg().chestStealer.autoClose = v);
+   }
+
+   private void chestStealerHelp(DrawContext context) {
+      int y = this.drawWrapped(
+         context, "Shift-клик по каждому слоту сундука, бочки, эндер-сундука или шалкера. Задержка 0 — всё за один тик.", this.footerY, 0xFF8B93A3
+      );
+      this.drawWrapped(context, "«Старт» — пауза после открытия: заодно успевает прийти содержимое контейнера.", y + 4, 0xFF586070);
    }
 
    private void buildAutoTotem() {
@@ -718,6 +817,7 @@ public final class ActestScreen extends Screen {
    private static enum Category {
       MOVEMENT("Движение"),
       COMBAT("Бой"),
+      WORLD("Мир"),
       RENDER("Визуал"),
       OTHER("Прочее");
 

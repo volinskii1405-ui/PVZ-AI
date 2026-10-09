@@ -3,7 +3,7 @@
   "id": "actest",
   "version": "${version}",
   "name": "AC Test Client",
-  "description": "Тестовый клиент для проверки собственного античита: Speed, Fly, NoFall, NoSlow, Step, Scaffold, Reach, KillAura, AutoClicker, Criticals, Velocity, AutoTotem и WH. Работает только на серверах из allowedServers.",
+  "description": "Тестовый клиент для проверки собственного античита: Speed, Fly, NoFall, NoSlow, Step, Jesus, Blink, Scaffold, FastBreak, ChestStealer, Reach, KillAura, AutoClicker, Criticals, Velocity, AutoTotem и WH. Работает только на серверах из allowedServers.",
   "authors": [
     "volinskii"
   ],

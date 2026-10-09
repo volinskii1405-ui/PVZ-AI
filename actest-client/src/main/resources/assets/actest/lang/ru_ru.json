@@ -13,5 +13,9 @@
   "key.actest.criticals": "Вкл/выкл Criticals",
   "key.actest.velocity": "Вкл/выкл Velocity",
   "key.actest.scaffold": "Вкл/выкл Scaffold",
+  "key.actest.jesus": "Вкл/выкл Jesus",
+  "key.actest.blink": "Вкл/выкл Blink",
+  "key.actest.fastbreak": "Вкл/выкл FastBreak",
+  "key.actest.cheststealer": "Вкл/выкл ChestStealer",
   "key.actest.menu": "Меню настроек"
 }

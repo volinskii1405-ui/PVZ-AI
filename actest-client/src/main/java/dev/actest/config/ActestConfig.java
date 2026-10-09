@@ -25,7 +25,9 @@ public final class ActestConfig {
    private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
    private static final Path PATH = FabricLoader.getInstance().getConfigDir().resolve("actest.json");
    /** Секции, появившиеся после 1.0.0: если какой-то нет в файле, конфиг дописывается значениями по умолчанию. */
-   private static final List<String> NEWER_SECTIONS = List.of("killAura", "autoTotem", "autoClicker", "criticals", "velocity", "scaffold");
+   private static final List<String> NEWER_SECTIONS = List.of(
+      "killAura", "autoTotem", "autoClicker", "criticals", "velocity", "scaffold", "blink", "jesus", "fastBreak", "chestStealer"
+   );
    private static ActestConfig instance = new ActestConfig();
    private static long lastModified = Long.MIN_VALUE;
    public List<String> allowedServers = new ArrayList<>(List.of("localhost", "127.0.0.1"));
@@ -44,6 +46,10 @@ public final class ActestConfig {
    public ActestConfig.Criticals criticals = new ActestConfig.Criticals();
    public ActestConfig.Velocity velocity = new ActestConfig.Velocity();
    public ActestConfig.Scaffold scaffold = new ActestConfig.Scaffold();
+   public ActestConfig.Blink blink = new ActestConfig.Blink();
+   public ActestConfig.Jesus jesus = new ActestConfig.Jesus();
+   public ActestConfig.FastBreak fastBreak = new ActestConfig.FastBreak();
+   public ActestConfig.ChestStealer chestStealer = new ActestConfig.ChestStealer();
    public ActestConfig.Hud hud = new ActestConfig.Hud();
 
    public static ActestConfig get() {
@@ -250,6 +256,27 @@ public final class ActestConfig {
       }
 
       this.scaffold.delay = Math.max(0, Math.min(10, this.scaffold.delay));
+      if (this.blink == null) {
+         this.blink = new ActestConfig.Blink();
+      }
+
+      this.blink.releaseTicks = Math.max(0, Math.min(100, this.blink.releaseTicks));
+      this.blink.maxTicks = Math.max(20, Math.min(1200, this.blink.maxTicks));
+      if (this.jesus == null) {
+         this.jesus = new ActestConfig.Jesus();
+      }
+
+      if (this.fastBreak == null) {
+         this.fastBreak = new ActestConfig.FastBreak();
+      }
+
+      this.fastBreak.breakAt = clamp(this.fastBreak.breakAt, 0.0, 1.0, 0.7);
+      if (this.chestStealer == null) {
+         this.chestStealer = new ActestConfig.ChestStealer();
+      }
+
+      this.chestStealer.delay = Math.max(0, Math.min(10, this.chestStealer.delay));
+      this.chestStealer.startDelay = Math.max(0, Math.min(20, this.chestStealer.startDelay));
       if (this.hud == null) {
          this.hud = new ActestConfig.Hud();
       }
@@ -392,6 +419,40 @@ public final class ActestConfig {
          NONE,
          PACKET;
       }
+   }
+
+   /** Настройки Blink. */
+   public static final class Blink {
+      /** 0 — отправить накопленное только при выключении; N > 0 — отправлять пачку каждые N тиков (0–100). */
+      public int releaseTicks = 0;
+      /** Через сколько тиков удержания модуль выключится сам и отправит очередь (20–1200). */
+      public int maxTicks = 200;
+   }
+
+   /** Настройки Jesus. */
+   public static final class Jesus {
+      /** Ходить и по лаве. */
+      public boolean lava = true;
+      /** Выталкивать вверх, если игрок уже в жидкости. */
+      public boolean swimUp = true;
+   }
+
+   /** Настройки FastBreak. */
+   public static final class FastBreak {
+      /** Завершить ломание, когда ванильный прогресс достиг этой доли (0–1; 1 — как в ванилле). */
+      public double breakAt = 0.7;
+      /** Убрать ванильную паузу в 5 тиков между блоками. */
+      public boolean noDelay = true;
+   }
+
+   /** Настройки ChestStealer. */
+   public static final class ChestStealer {
+      /** Пауза между кликами, тиков (0 — весь контейнер за один тик). */
+      public int delay = 1;
+      /** Пауза после открытия контейнера перед первым кликом, тиков. */
+      public int startDelay = 2;
+      /** Закрыть контейнер, когда всё забрано (или инвентарь полон). */
+      public boolean autoClose = true;
    }
 
    public static final class Hud {

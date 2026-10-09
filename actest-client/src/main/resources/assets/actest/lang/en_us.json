@@ -13,5 +13,9 @@
   "key.actest.criticals": "Toggle Criticals",
   "key.actest.velocity": "Toggle Velocity",
   "key.actest.scaffold": "Toggle Scaffold",
+  "key.actest.jesus": "Toggle Jesus",
+  "key.actest.blink": "Toggle Blink",
+  "key.actest.fastbreak": "Toggle FastBreak",
+  "key.actest.cheststealer": "Toggle ChestStealer",
   "key.actest.menu": "Open settings menu"
 }

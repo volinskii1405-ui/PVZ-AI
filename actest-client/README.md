@@ -1,34 +1,40 @@
-# AC Test Client 1.2.0 (Fabric, Minecraft 1.21.4)
+# AC Test Client 1.3.0 (Fabric, Minecraft 1.21.4)
 
 Тестовый клиент для проверки собственного античита. Модули включаются **только** в одиночной игре
 (`allowSingleplayer`) и на серверах из списка `allowedServers` в `config/actest.json` — на любом другом
 сервере клавиши не срабатывают, а уже включённые модули выключаются.
 
-Новое в 1.2.0: **AutoClicker** (B), **Criticals** (U), **Velocity** (Z) — категория «Бой» в меню,
-**Scaffold** (I) — категория «Движение». Страница «Клавиши» — в две колонки.
+Новое в 1.3.0: **Jesus** (M) и **Blink** (O) — категория «Движение»; новая категория «Мир» —
+**FastBreak** и **ChestStealer** (без клавиш по умолчанию, включаются в меню) и перенесённый туда **Scaffold**.
+
+Новое в 1.2.0: **AutoClicker** (B), **Criticals** (U), **Velocity** (Z), **Scaffold** (I).
 
 Новое в 1.1.0: **KillAura** (V) и **AutoTotem** (Y).
 
 Секции новых модулей дописываются в старый `config/actest.json` автоматически со значениями по
 умолчанию, остальные настройки не трогаются. При включённом «Логе движения» (`debugLog`) каждое
 действие модулей пишется в `logs/latest.log` строками `[KillAura]`, `[AutoTotem]`, `[AutoClicker]`,
-`[Criticals]`, `[Velocity]`, `[Scaffold]` — рядом со строками `[Move]`.
+`[Criticals]`, `[Velocity]`, `[Scaffold]`, `[Blink]`, `[FastBreak]`, `[ChestStealer]` — рядом со строками
+`[Move]`.
 
 ## Установка
 
 1. Fabric Loader 0.16+ для 1.21.4 и Fabric API.
-2. Положить `release/actest-client-1.2.0.jar` в `.minecraft/mods/` (старые версии `actest-client-*.jar` удалить).
+2. Положить `release/actest-client-1.3.0.jar` в `.minecraft/mods/` (старые версии `actest-client-*.jar` удалить).
 3. Запустить игру, добавить адрес тестового сервера в `allowedServers` (как в списке серверов, с портом
    или без) — конфиг перечитывается сам раз в секунду, перезапуск не нужен.
 
-| Движение | Клавиша    | Бой         | Клавиша | Прочее   | Клавиша     |
-|----------|------------|-------------|---------|----------|-------------|
-| Speed    | R          | Reach       | K       | WH (ESP) | H           |
-| Fly      | G          | KillAura    | V       | Меню     | Right Shift |
-| NoFall   | N          | AutoClicker | B       |          |             |
-| NoSlow   | — (в меню) | Criticals   | U       |          |             |
-| Step     | J          | Velocity    | Z       |          |             |
-| Scaffold | I          | AutoTotem   | Y       |          |             |
+| Движение | Клавиша    | Бой         | Клавиша | Мир          | Клавиша | Прочее   | Клавиша     |
+|----------|------------|-------------|---------|--------------|---------|----------|-------------|
+| Speed    | R          | Reach       | K       | Scaffold     | I       | WH (ESP) | H           |
+| Fly      | G          | KillAura    | V       | FastBreak    | —       | Меню     | Right Shift |
+| NoFall   | N          | AutoClicker | B       | ChestStealer | —       |          |             |
+| NoSlow   | —          | Criticals   | U       |              |         |          |             |
+| Step     | J          | Velocity    | Z       |              |         |          |             |
+| Jesus    | M          | AutoTotem   | Y       |              |         |          |             |
+| Blink    | O          |             |         |              |         |          |             |
+
+«—» — клавиши по умолчанию нет: модуль включается в меню или назначьте клавишу в «Управлении».
 
 Переназначить: Настройки → Управление → AC Test Client.
 
@@ -40,11 +46,12 @@ module/Module           общий интерфейс: getName, toggle, onTick, 
 module/AbstractModule   имя + клавиша + флаг включения (onEnable/onDisable)
 module/ModuleManager    регистрация модулей, клавиши, тик/рендер, отключение вне allowedServers
 module/ServerGuard      проверка singleplayer / allowedServers
-module/*Module          Speed, Fly, NoFall, NoSlow, Step, Scaffold, Reach, KillAura, AutoClicker,
-                        Criticals, Velocity, AutoTotem, Wallhack
+module/*Module          Speed, Fly, NoFall, NoSlow, Step, Jesus, Blink, Scaffold, FastBreak, ChestStealer,
+                        Reach, KillAura, AutoClicker, Criticals, Velocity, AutoTotem, Wallhack
 module/Rotations        углы на точку, нормализация yaw, «тихий» поворот пакетом (KillAura, Scaffold)
 mixin/*                 NoFall (onGround в sendMovementPackets), WH (контур glowing и его цвет),
-                        Velocity (onEntityVelocityUpdate / onExplosion), Criticals (attackEntity)
+                        Velocity (onEntityVelocityUpdate / onExplosion), Criticals (attackEntity),
+                        Blink (sendPacket), Jesus (коллизия жидкостей в AbstractBlockState)
 config/ActestConfig     config/actest.json (Gson), автоперечитывание при изменении файла
 gui/ActestScreen        меню настроек; render/ModuleListHud — HUD-список включённых модулей
 ```
@@ -91,6 +98,23 @@ gui/ActestScreen        меню настроек; render/ModuleListHud — HUD-
   "delay": 0,              // 0–10 тиков между установками
   "switchBack": true,      // вернуть выбранный слот хотбара
   "swing": true            // взмах рукой после установки
+},
+"blink": {
+  "releaseTicks": 0,       // 0 — отправить накопленное при выключении; N — пачкой каждые N тиков (0–100)
+  "maxTicks": 200          // через сколько тиков выключиться самому (20–1200, по умолчанию 10 с)
+},
+"jesus": {
+  "lava": true,            // ходить и по лаве
+  "swimUp": true           // выталкивать к поверхности, если игрок уже в жидкости
+},
+"fastBreak": {
+  "breakAt": 0.7,          // 0–1: завершить ломание при такой доле ванильного прогресса (1 — ваниль)
+  "noDelay": true          // без ванильной паузы 5 тиков между блоками
+},
+"chestStealer": {
+  "delay": 1,              // тиков между кликами (0 — весь контейнер за один тик)
+  "startDelay": 2,         // тиков после открытия до первого клика
+  "autoClose": true        // закрыть контейнер, когда всё забрано или инвентарь полон
 }
 ```
 
@@ -214,6 +238,64 @@ Criticals срабатывает на любой удар — ручной, Kill
 [Scaffold] age=4410 pos=12,63,-40 against=up slot=0->3 placed=true rot=PACKET yaw=-12.40 pitch=81.95
 ```
 
+### Blink
+
+Пока модуль включён, все `PlayerMoveC2SPacket` (Full / PositionAndOnGround / LookAndOnGround /
+OnGroundOnly) не уходят, а копятся; остальные пакеты — атаки, клики, взмахи, keep-alive — идут как обычно.
+При выключении (или каждые `releaseTicks` тиков) очередь уходит пачкой в исходном порядке.
+
+Что можно ловить: тишина по пакетам движения при живом соединении (keep-alive отвечает); затем пачка
+из десятков пакетов движения в одном серверном тике — баланс/timer-проверки видят «лишнее время»;
+атаки и клики во время Blink — с позиции, где сервер видел игрока последний раз; большое смещение
+относительно этой позиции после пачки. Если во время Blink сервер телепортирует игрока, старые пакеты
+придут после телепорта и вызовут откат.
+
+```
+[Blink] age=5120 reason=disable packets=63 heldTicks=64 jump=11.842
+```
+
+`jump` — на сколько блоков игрок сместился с момента предыдущей отправки.
+
+### Jesus
+
+Миксин делает воду и лаву твёрдым полным блоком для своего игрока, пока ноги выше верха этого блока
+(присесть — нырнуть). Клиент идёт по поверхности обычной наземной физикой, в пакетах движения
+`onGround=true`, скорость — как по земле, прыжки — с поверхности. Если игрок уже в жидкости и
+`swimUp: true`, ему каждый тик выставляется вертикальная скорость 0.11 вверх.
+
+Что можно ловить: `onGround=true` над жидкостью без твёрдого блока; y держится ровно на уровне
+верха блока жидкости (на 1/9 выше её видимой поверхности); наземная скорость и спринт там, где должно
+быть плавание; прыжки от воды. Отдельной строки в логе нет — смотрите `[Move]` (ground=true над водой).
+
+### FastBreak
+
+Ломание остаётся ванильным (`PlayerActionC2SPacket` START_DESTROY_BLOCK → STOP_DESTROY_BLOCK), но STOP
+уходит раньше: как только ванильный прогресс достиг `breakAt`, модуль выставляет 1.0, и на следующем тике
+игра сама шлёт STOP. С `noDelay` следующий блок начинается без ванильной паузы в 5 тиков.
+
+Что можно ловить: время между START и STOP меньше, чем нужно этому блоку этим инструментом. Ванильный
+сервер сам принимает STOP начиная с 70% прогресса; при меньшем `breakAt` он не ломает блок сразу, а
+доламывает его по полному времени — античит должен ловить и это. Без паузы — новый START сразу за STOP.
+
+```
+[FastBreak] age=6031 progress=0.712 breakAt=0.70
+```
+
+### ChestStealer
+
+Пока открыт сундук, бочка, эндер-сундук или шалкер, модуль шлёт `ClickSlotC2SPacket` (QUICK_MOVE —
+shift-клик) по каждому непустому слоту контейнера: первый — через `startDelay` тиков после открытия, дальше
+— каждые `delay` тиков (при 0 — все в одном тике). В конце — `CloseHandledScreenC2SPacket`, если
+`autoClose`.
+
+Что можно ловить: первый клик через ≤ 2 тика после `OpenScreenS2CPacket`; ровные интервалы между кликами
+без разброса; несколько кликов в одном тике; клики строго по порядку слотов, пропуская пустые (мышь так
+не двигается); закрытие сразу после последнего клика.
+
+```
+[ChestStealer] age=7202 syncId=4 slot=13 taken=6
+```
+
 ### Остальные модули (кратко)
 
 - **Speed**: увеличенное горизонтальное смещение в пакетах движения (`dXZ` в `[Move]`); BHOP —
@@ -234,14 +316,14 @@ Criticals срабатывает на любой удар — ручной, Kill
 ./gradlew build          # Windows: gradlew.bat build
 ```
 
-Готовый мод — `build/libs/actest-client-1.2.0.jar`. Если Gradle не найдёт версию Yarn или Fabric API
+Готовый мод — `build/libs/actest-client-1.3.0.jar`. Если Gradle не найдёт версию Yarn или Fabric API
 из `gradle.properties`, возьмите актуальные для 1.21.4 на https://fabricmc.net/develop.
 
-## Как собран `release/actest-client-1.2.0.jar`
+## Как собран `release/actest-client-1.3.0.jar`
 
 Исходников 1.0.0 не было — только jar, поэтому `src/` восстановлен декомпиляцией 1.0.0 (Vineflower)
 с переводом имён в Yarn 1.21.4; комментарии в старых классах добавлены заново. В среде, где делалась
-1.1.0 и 1.2.0, не было доступа к Maven Fabric и серверам Mojang, поэтому Loom запустить не удалось,
+1.1.0–1.3.0, не было доступа к Maven Fabric и серверам Mojang, поэтому Loom запустить не удалось,
 и jar собран так:
 
 - все классы 1.0.0, включая старые миксины, оставлены байт-в-байт;
@@ -249,7 +331,10 @@ Criticals срабатывает на любой удар — ручной, Kill
   миксина — javac против заглушек Minecraft API, сгенерированных из маппингов Yarn 1.21.4 (имена
   intermediary, как в рантайме);
 - в refmap вручную добавлены записи для новых миксинов в том же формате, что генерирует Loom
-  (`onEntityVelocityUpdate`, `onExplosion`, `attackEntity` → intermediary-имена с дескрипторами);
+  (`onEntityVelocityUpdate`, `onExplosion`, `attackEntity`, `sendPacket`, `getCollisionShape(...)` →
+  intermediary-имена с дескрипторами);
+- FastBreak обращается к приватным полям через reflection и пробует оба имени — intermediary (в собранном
+  моде) и Yarn (при запуске из IDE); если поле не найдётся, модуль просто не работает, игра не падает;
 - каждая ссылка на Minecraft в новом байткоде сверена с маппингами (имя + дескриптор), а ссылки в
   перекомпилированных старых классах — с байткодом 1.0.0.
 

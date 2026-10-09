@@ -33,7 +33,11 @@ public final class ModuleManager {
       this.register(new NoFallModule());
       this.register(new NoSlowModule());
       this.register(new StepModule());
+      this.register(new JesusModule());
+      this.register(new BlinkModule());
       this.register(new ScaffoldModule());
+      this.register(new FastBreakModule());
+      this.register(new ChestStealerModule());
       this.register(new ReachModule());
       this.register(new KillAuraModule());
       this.register(new AutoClickerModule());
