@@ -1,0 +1,628 @@
+package dev.actest.gui;
+
+import dev.actest.config.ActestConfig;
+import dev.actest.gui.widget.ColorChip;
+import dev.actest.gui.widget.FlatButton;
+import dev.actest.gui.widget.HueSlider;
+import dev.actest.gui.widget.PillToggle;
+import dev.actest.gui.widget.Segmented;
+import dev.actest.gui.widget.Slider;
+import dev.actest.gui.widget.TabButton;
+import dev.actest.gui.widget.ToggleSwitch;
+import dev.actest.gui.widget.TopTab;
+import dev.actest.module.AutoTotemModule;
+import dev.actest.module.FlyModule;
+import dev.actest.module.KillAuraModule;
+import dev.actest.module.Module;
+import dev.actest.module.ModuleManager;
+import dev.actest.module.NoFallModule;
+import dev.actest.module.NoSlowModule;
+import dev.actest.module.ReachModule;
+import dev.actest.module.SpeedModule;
+import dev.actest.module.StepModule;
+import dev.actest.module.WallhackModule;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
+import java.util.function.DoubleConsumer;
+import java.util.function.DoubleFunction;
+import java.util.function.DoubleSupplier;
+import java.util.function.Function;
+import java.util.function.Supplier;
+import net.minecraft.client.gui.DrawContext;
+import net.minecraft.client.gui.screen.Screen;
+import net.minecraft.client.gui.tooltip.Tooltip;
+import net.minecraft.client.network.ServerInfo;
+import net.minecraft.client.option.KeyBinding;
+import net.minecraft.text.OrderedText;
+import net.minecraft.text.Text;
+import net.minecraft.util.Formatting;
+
+/**
+ * Меню настроек (по умолчанию Right Shift): категории, страницы модулей, переключатели и слайдеры.
+ */
+public final class ActestScreen extends Screen {
+   private static final int PANEL_WIDTH = 360;
+   private static final int SIDEBAR_WIDTH = 86;
+   private static final int HEADER_HEIGHT = 24;
+   private static final int ROW_HEIGHT = 18;
+   private static final int MAX_ROWS = 9;
+   private static final int PAD = 10;
+   private static final int PANEL_HEIGHT = 206;
+   private static final int[] PRESET_COLORS = new int[]{0xFF4040, 0xFF9020, 0xFFFF40, 0x40FF40, 0x40FFFF, 0x4080FF, 0xC040FF, 0xFFFFFF};
+   private static ActestScreen.Category category = ActestScreen.Category.MOVEMENT;
+   private static final int[] selectedPage = new int[ActestScreen.Category.values().length];
+   private static ActestConfig.Wallhack.Target colorTarget = ActestConfig.Wallhack.Target.PLAYERS;
+   private final ModuleManager modules;
+   private final List<ActestScreen.Row> rows = new ArrayList<>();
+   private ActestScreen.Page page;
+   private boolean rebuild;
+   private int panelX;
+   private int panelY;
+   private int panelWidth;
+   private int contentX;
+   private int contentRight;
+   private int nextRowY;
+   private int footerY;
+
+   public ActestScreen(ModuleManager modules) {
+      super(Text.literal("AC Test Client"));
+      this.modules = modules;
+   }
+
+   private static ActestConfig cfg() {
+      return ActestConfig.get();
+   }
+
+   private List<ActestScreen.Page> pages(ActestScreen.Category c) {
+      return switch (c) {
+         case MOVEMENT -> List.of(
+         this.modulePage(SpeedModule.class, this::buildSpeed, this::speedHelp),
+         this.modulePage(FlyModule.class, this::buildFly, this::flyHelp),
+         this.modulePage(NoFallModule.class, this::buildNoFall, this::noFallHelp),
+         this.modulePage(NoSlowModule.class, this::buildNoSlow, this::noSlowHelp),
+         this.modulePage(StepModule.class, this::buildStep, this::stepHelp)
+      );
+         case COMBAT -> List.of(
+         this.modulePage(ReachModule.class, this::buildReach, this::reachHelp),
+         this.modulePage(KillAuraModule.class, this::buildKillAura, this::killAuraHelp),
+         this.modulePage(AutoTotemModule.class, this::buildAutoTotem, this::autoTotemHelp)
+      );
+         case RENDER -> List.of(this.modulePage(WallhackModule.class, this::buildWallhack, null));
+         case OTHER -> List.of(
+         new ActestScreen.Page("Интерфейс", null, this::buildInterface, this::interfaceHelp), new ActestScreen.Page("Клавиши", null, () -> {
+         }, this::keysHelp)
+      );
+      };
+   }
+
+   private ActestScreen.Page modulePage(Class<? extends Module> type, Runnable build, Consumer<DrawContext> footer) {
+      Module module = this.modules.get(type);
+      return new ActestScreen.Page(module.getName(), module, build, footer);
+   }
+
+   private void buildSpeed() {
+      this.moduleRow(this.page.module());
+      this.segmentedRow(
+         "Режим",
+         130,
+         ActestConfig.Speed.Mode.values(),
+         mode -> mode == ActestConfig.Speed.Mode.GROUND ? "По земле" : "Bhop",
+         () -> cfg().speed.mode,
+         mode -> cfg().speed.mode = mode
+      );
+      this.sliderRow("Скорость", 1.0, 5.0, 0.05, () -> cfg().speed.multiplier, v -> cfg().speed.multiplier = v, v -> String.format(Locale.ROOT, "x%.2f", v));
+   }
+
+   private void speedHelp(DrawContext context) {
+      String text = cfg().speed.mode == ActestConfig.Speed.Mode.GROUND
+         ? "По земле: меняется только скорость ходьбы по земле, прыжок и падение остаются ванильными."
+         : "Bhop: автопрыжок при каждом касании земли с ускорением, в воздухе скорость поворачивает за WASD.";
+      int y = this.drawWrapped(context, text, this.footerY, 0xFF8B93A3);
+      this.drawWrapped(context, "x1.00 — обычная скорость, x1.40 ≈ легитный спринт под Speed II.", y + 4, 0xFF586070);
+   }
+
+   private void buildFly() {
+      this.moduleRow(this.page.module());
+      this.segmentedRow(
+         "Режим",
+         150,
+         ActestConfig.Fly.Mode.values(),
+         mode -> mode == ActestConfig.Fly.Mode.MOTION ? "Полёт" : "Планирование",
+         () -> cfg().fly.mode,
+         mode -> cfg().fly.mode = mode
+      );
+      this.sliderRow("Скорость", 0.1, 2.0, 0.05, () -> cfg().fly.speed, v -> cfg().fly.speed = v, v -> String.format(Locale.ROOT, "%.2f б/т", v));
+      this.sliderRow(
+         "Вверх / вниз", 0.1, 2.0, 0.05, () -> cfg().fly.verticalSpeed, v -> cfg().fly.verticalSpeed = v, v -> String.format(Locale.ROOT, "%.2f б/т", v)
+      );
+      this.sliderRow("Падение", 0.01, 0.3, 0.01, () -> cfg().fly.glideSpeed, v -> cfg().fly.glideSpeed = v, v -> String.format(Locale.ROOT, "%.2f б/т", v));
+   }
+
+   private void flyHelp(DrawContext context) {
+      String text = cfg().fly.mode == ActestConfig.Fly.Mode.MOTION
+         ? "Полёт: зависание в воздухе, WASD — движение, Space — вверх, Shift — вниз."
+         : "Планирование: обычное движение, но падение не быстрее заданной скорости.";
+      int y = this.drawWrapped(context, text, this.footerY, 0xFF8B93A3);
+      this.drawWrapped(context, "Ваниль сама кикает за полёт через 4 с, если allow-flight=false в server.properties.", y + 4, 0xFF586070);
+   }
+
+   private void buildNoFall() {
+      this.moduleRow(this.page.module());
+      this.segmentedRow(
+         "Режим",
+         130,
+         ActestConfig.NoFall.Mode.values(),
+         mode -> mode == ActestConfig.NoFall.Mode.SPOOF ? "Spoof" : "Packet",
+         () -> cfg().noFall.mode,
+         mode -> cfg().noFall.mode = mode
+      );
+   }
+
+   private void noFallHelp(DrawContext context) {
+      String text = cfg().noFall.mode == ActestConfig.NoFall.Mode.SPOOF
+         ? "Spoof: обычные пакеты движения сообщают onGround=true, пока игрок падает."
+         : "Packet: пакеты движения честные, но каждый тик падения отправляется ещё OnGroundOnly(true).";
+      int y = this.drawWrapped(context, text, this.footerY, 0xFF8B93A3);
+      this.drawWrapped(context, "Срабатывает после 2 блоков падения — урон начинается после 3.", y + 4, 0xFF586070);
+   }
+
+   private void buildNoSlow() {
+      this.moduleRow(this.page.module());
+      this.toggleRow("Предметы", () -> cfg().noSlow.items, v -> cfg().noSlow.items = v)
+         .setTooltip(Tooltip.of(Text.literal("Еда, зелья, лук, арбалет, щит, трезубец, подзорная труба")));
+      this.toggleRow("Песок душ и мёд", () -> cfg().noSlow.blocks, v -> cfg().noSlow.blocks = v);
+   }
+
+   private void noSlowHelp(DrawContext context) {
+      int y = this.drawWrapped(
+         context,
+         "Скорость ходьбы по земле как без замедления: ваниль при использовании предмета даёт 0.2 от обычной, песок душ и мёд — 0.4.",
+         this.footerY,
+         0xFF8B93A3
+      );
+      this.drawWrapped(context, "Клавиши по умолчанию нет — включается здесь или назначьте в «Управлении».", y + 4, 0xFF586070);
+   }
+
+   private void buildStep() {
+      this.moduleRow(this.page.module());
+      this.sliderRow("Высота шага", 0.6, 3.0, 0.1, () -> cfg().step.height, v -> cfg().step.height = v, v -> String.format(Locale.ROOT, "%.1f бл.", v));
+   }
+
+   private void stepHelp(DrawContext context) {
+      int y = this.drawWrapped(context, "Подъём на блоки без прыжка: 1.0 — полный блок, 2.0 — два блока за один тик.", this.footerY, 0xFF8B93A3);
+      this.drawWrapped(context, "Ванильная высота шага 0.6 — ступеньки и полублоки.", y + 4, 0xFF586070);
+   }
+
+   private void buildReach() {
+      this.moduleRow(this.page.module());
+      this.sliderRow("Атака", 3.0, 8.0, 0.1, () -> cfg().reach.entityRange, v -> cfg().reach.entityRange = v, v -> String.format(Locale.ROOT, "%.1f бл.", v));
+      this.toggleRow("Блоки тоже", () -> cfg().reach.blocks, v -> cfg().reach.blocks = v);
+      this.sliderRow("Блоки", 4.5, 8.0, 0.1, () -> cfg().reach.blockRange, v -> cfg().reach.blockRange = v, v -> String.format(Locale.ROOT, "%.1f бл.", v));
+   }
+
+   private void reachHelp(DrawContext context) {
+      int y = this.drawWrapped(context, "Дальность атаки и взаимодействия с блоками. Ваниль: атака 3.0, блоки 4.5.", this.footerY, 0xFF8B93A3);
+      this.drawWrapped(context, "Атака уходит обычным пакетом PlayerInteractEntityC2SPacket — дистанцию проверяет сервер.", y + 4, 0xFF586070);
+   }
+
+   private void buildKillAura() {
+      this.moduleRow(this.page.module());
+      this.segmentedRow("Поворот", 150, ActestConfig.KillAura.Rotation.values(), rotation -> {
+         return switch (rotation) {
+            case NONE -> "Нет";
+            case PACKET -> "Пакет";
+            case CLIENT -> "Камера";
+         };
+      }, () -> cfg().killAura.rotation, rotation -> cfg().killAura.rotation = rotation);
+      this.segmentedRow("Приоритет", 168, ActestConfig.KillAura.Priority.values(), priority -> {
+         return switch (priority) {
+            case DISTANCE -> "Ближний";
+            case HEALTH -> "Слабый";
+            case ANGLE -> "Прицел";
+         };
+      }, () -> cfg().killAura.priority, priority -> cfg().killAura.priority = priority);
+      this.sliderRow("Радиус", 1.0, 6.0, 0.1, () -> cfg().killAura.range, v -> cfg().killAura.range = v, v -> String.format(Locale.ROOT, "%.1f бл.", v));
+      this.toggleRow("Ждать кулдаун", () -> cfg().killAura.waitCooldown, v -> cfg().killAura.waitCooldown = v)
+         .setTooltip(Tooltip.of(Text.literal("Бить, когда шкала атаки заполнена (как в 1.9+). Выкл — с частотой CPS")));
+      this.sliderRow("CPS", 1.0, 20.0, 1.0, () -> cfg().killAura.cps, v -> cfg().killAura.cps = v, v -> String.format(Locale.ROOT, "%.0f уд/с", v));
+      int y = this.pillRowY("Цели");
+      this.placePills(
+         new PillToggle(0, y, 14, "Игроки", () -> cfg().killAura.players, v -> cfg().killAura.players = v),
+         new PillToggle(0, y, 14, "Монстры", () -> cfg().killAura.hostileMobs, v -> cfg().killAura.hostileMobs = v),
+         new PillToggle(0, y, 14, "Мирные", () -> cfg().killAura.passiveMobs, v -> cfg().killAura.passiveMobs = v)
+      );
+      y = this.pillRowY("Ещё");
+      this.placePills(
+         new PillToggle(0, y, 14, "Сквозь стены", () -> cfg().killAura.throughWalls, v -> cfg().killAura.throughWalls = v),
+         new PillToggle(0, y, 14, "Взмах рукой", () -> cfg().killAura.swing, v -> cfg().killAura.swing = v)
+      );
+   }
+
+   private void killAuraHelp(DrawContext context) {
+      String text = switch (cfg().killAura.rotation) {
+         case NONE -> "Без поворота: удар уходит, куда бы игрок ни смотрел.";
+         case PACKET -> "Пакет: перед ударом серверу уходит взгляд на цель, потом возвращается настоящий.";
+         case CLIENT -> "Камера наводится на цель, удар — тиком позже, когда поворот уже ушёл на сервер.";
+      };
+      this.drawWrapped(context, text, this.footerY, 0xFF8B93A3);
+   }
+
+   private void buildAutoTotem() {
+      this.moduleRow(this.page.module());
+      this.segmentedRow(
+         "Когда",
+         150,
+         ActestConfig.AutoTotem.Mode.values(),
+         mode -> mode == ActestConfig.AutoTotem.Mode.ALWAYS ? "Всегда" : "По здоровью",
+         () -> cfg().autoTotem.mode,
+         mode -> cfg().autoTotem.mode = mode
+      );
+      this.sliderRow(
+         "Порог здоровья", 1.0, 20.0, 1.0, () -> cfg().autoTotem.health, v -> cfg().autoTotem.health = v, v -> String.format(Locale.ROOT, "%.0f HP", v)
+      );
+      this.segmentedRow(
+         "Способ",
+         150,
+         ActestConfig.AutoTotem.Method.values(),
+         method -> method == ActestConfig.AutoTotem.Method.SWAP ? "Swap (F)" : "Клики",
+         () -> cfg().autoTotem.method,
+         method -> cfg().autoTotem.method = method
+      );
+      this.sliderRow(
+         "Задержка",
+         0.0,
+         20.0,
+         1.0,
+         () -> (double)cfg().autoTotem.delay,
+         v -> cfg().autoTotem.delay = (int)Math.round(v),
+         v -> String.format(Locale.ROOT, "%.0f тик.", v)
+      );
+   }
+
+   private void autoTotemHelp(DrawContext context) {
+      String text = cfg().autoTotem.method == ActestConfig.AutoTotem.Method.SWAP
+         ? "Swap: один ClickSlotC2SPacket (SWAP, кнопка 40) — как F в открытом инвентаре."
+         : "Клики: 2–3 ClickSlotC2SPacket PICKUP — взять тотем, положить во вторую руку, вернуть предмет.";
+      int y = this.drawWrapped(context, text, this.footerY, 0xFF8B93A3);
+      this.drawWrapped(context, "Экран инвентаря не открывается. Задержка считается с момента, когда тотем пропал из руки.", y + 4, 0xFF586070);
+   }
+
+   private void buildWallhack() {
+      this.moduleRow(this.page.module());
+      this.segmentedRow("Вид", 150, ActestConfig.Wallhack.Mode.values(), mode -> {
+         return switch (mode) {
+            case GLOW -> "Контур";
+            case BOX -> "Рамки";
+            case BOTH -> "Оба";
+         };
+      }, () -> cfg().wallhack.mode, mode -> cfg().wallhack.mode = mode);
+
+      for (ActestConfig.Wallhack.Target target : ActestConfig.Wallhack.Target.values()) {
+         ToggleSwitch toggle = this.toggleRow(targetName(target), () -> cfg().wallhack.shows(target), v -> cfg().wallhack.setShown(target, v));
+         ((ColorChip)this.addDrawableChild(
+               new ColorChip(
+                  toggle.getX() - 18,
+                  toggle.getY() + 1,
+                  10,
+                  Text.literal("Цвет: " + targetName(target)),
+                  () -> cfg().wallhack.color(target),
+                  () -> colorTarget == target,
+                  () -> colorTarget = target
+               )
+            ))
+            .setTooltip(Tooltip.of(Text.literal("Нажмите, чтобы менять цвет этой группы")));
+      }
+
+      int y = this.row("Подписи");
+      PillToggle distance = new PillToggle(0, center(y, 14), 14, "Дистанция", () -> cfg().wallhack.showDistance, v -> cfg().wallhack.showDistance = v);
+      distance.setX(this.contentRight - distance.getWidth());
+      PillToggle names = new PillToggle(0, center(y, 14), 14, "Имена", () -> cfg().wallhack.showNames, v -> cfg().wallhack.showNames = v);
+      names.setX(distance.getX() - 4 - names.getWidth());
+      this.addDrawableChild(names);
+      this.addDrawableChild(distance);
+      this.sliderRow(
+         "Дальность", 16.0, 512.0, 8.0, () -> cfg().wallhack.maxDistance, v -> cfg().wallhack.maxDistance = v, v -> String.format(Locale.ROOT, "%.0f бл.", v)
+      );
+      y = this.row(() -> Text.literal("Цвет " + targetGenitive(colorTarget)));
+      this.addDrawableChild(
+         new HueSlider(
+            this.contentRight - 150,
+            center(y, 14),
+            150,
+            14,
+            Text.literal("Оттенок"),
+            () -> cfg().wallhack.color(colorTarget),
+            rgb -> cfg().wallhack.setColor(colorTarget, rgb)
+         )
+      );
+      y = this.row(() -> Text.literal("Палитра").formatted(Formatting.GRAY));
+      int size = 10;
+      int gap = 6;
+      int x = this.contentRight - (PRESET_COLORS.length * (size + gap) - gap);
+
+      for (int preset : PRESET_COLORS) {
+         this.addDrawableChild(
+            new ColorChip(
+               x,
+               center(y, size),
+               size,
+               Text.literal(String.format("#%06X", preset)),
+               () -> preset,
+               () -> cfg().wallhack.color(colorTarget) == preset,
+               () -> cfg().wallhack.setColor(colorTarget, preset)
+            )
+         );
+         x += size + gap;
+      }
+   }
+
+   private void buildInterface() {
+      this.toggleRow("Список модулей на экране", () -> cfg().hud.enabled, v -> cfg().hud.enabled = v);
+      this.toggleRow("Лог движения", () -> cfg().debugLog, v -> cfg().debugLog = v)
+         .setTooltip(Tooltip.of(Text.literal("В logs/latest.log: смещение, onGround и NoFall за каждый тик, каждый удар KillAura и перекладывание AutoTotem")));
+      int y = this.row("Конфиг actest.json");
+      ((FlatButton)this.addDrawableChild(new FlatButton(this.contentRight - 86, center(y, 14), 86, 14, "Перечитать", () -> {
+         ActestConfig.load();
+         this.rebuild = true;
+      }))).setTooltip(Tooltip.of(Text.literal("Загрузить config/actest.json заново, если правили его вручную")));
+   }
+
+   private void interfaceHelp(DrawContext context) {
+      this.drawWrapped(
+         context,
+         "Лог пишет [Move] на каждый тик (dXZ, dY, onGround — как их получил сервер), [KillAura] на каждый удар и [AutoTotem] на каждое перекладывание.",
+         this.footerY,
+         0xFF8B93A3
+      );
+   }
+
+   private void keysHelp(DrawContext context) {
+      int y = this.nextRowY + 2;
+
+      for (Module module : this.modules.all()) {
+         y = this.drawKeyLine(context, module.getName(), module.getKeyBinding(), y);
+      }
+
+      y = this.drawKeyLine(context, "Это меню", this.modules.getMenuKey(), y);
+      this.drawWrapped(context, "Переназначить: Настройки → Управление → AC Test Client.", y + 2, 0xFF586070);
+   }
+
+   protected void init() {
+      this.rows.clear();
+      this.panelWidth = Math.min(360, this.width - 8);
+      this.panelX = (this.width - this.panelWidth) / 2;
+      this.panelY = Math.max(4, (this.height - 206) / 2);
+      this.contentX = this.panelX + 86 + 10;
+      this.contentRight = this.panelX + this.panelWidth - 10;
+      this.nextRowY = this.panelY + 24 + 10;
+      int tabX = this.panelX + 86 + 4;
+
+      for (ActestScreen.Category c : ActestScreen.Category.values()) {
+         TopTab tab = (TopTab)this.addDrawableChild(new TopTab(tabX, this.panelY, 24, c.title, () -> category == c, () -> this.switchCategory(c)));
+         tabX += tab.getWidth();
+      }
+
+      this.addDrawableChild(new FlatButton(this.panelX + this.panelWidth - 20, this.panelY + 5, 14, 14, "×", this::close));
+      List<ActestScreen.Page> pages = this.pages(category);
+      int index = Math.min(selectedPage[category.ordinal()], pages.size() - 1);
+      int itemY = this.panelY + 24 + 8;
+
+      for (int i = 0; i < pages.size(); i++) {
+         ActestScreen.Page p = pages.get(i);
+         int pageIndex = i;
+         BooleanSupplier indicator = p.module() == null ? null : p.module()::isEnabled;
+         this.addDrawableChild(
+            new TabButton(
+               this.panelX, itemY, 86, 18, p.title(), () -> selectedPage[category.ordinal()] == pageIndex, indicator, () -> this.selectPage(pageIndex)
+            )
+         );
+         itemY += 20;
+      }
+
+      this.page = pages.get(index);
+      this.page.build().run();
+      this.footerY = this.nextRowY + 6;
+   }
+
+   private void moduleRow(Module module) {
+      KeyBinding key = module.getKeyBinding();
+      String keyName = key.isUnbound() ? "без клавиши" : key.getBoundKeyLocalizedText().getString();
+      Text label = Text.literal(module.getName())
+         .formatted(Formatting.BOLD)
+         .append(Text.literal("  " + keyName).formatted(Formatting.GRAY));
+      int y = this.row(() -> label);
+      ToggleSwitch toggle = (ToggleSwitch)this.addDrawableChild(
+         new ToggleSwitch(this.contentRight - 22, center(y, 12), Text.literal(module.getName()), module::isEnabled, module::setEnabled)
+      );
+      if (!this.modules.canEnableModules(this.client) && !module.isEnabled()) {
+         toggle.active = false;
+         toggle.setTooltip(Tooltip.of(Text.literal("Этот сервер не в allowedServers (config/actest.json)")));
+      }
+   }
+
+   private ToggleSwitch toggleRow(String label, BooleanSupplier getter, Consumer<Boolean> setter) {
+      int y = this.row(label);
+      return (ToggleSwitch)this.addDrawableChild(new ToggleSwitch(this.contentRight - 22, center(y, 12), Text.literal(label), getter, setter));
+   }
+
+   private <T> void segmentedRow(String label, int width, T[] values, Function<T, String> names, Supplier<T> getter, Consumer<T> setter) {
+      int y = this.row(label);
+      this.addDrawableChild(new Segmented<T>(this.contentRight - width, center(y, 14), width, 14, Text.literal(label), values, names, getter, setter));
+   }
+
+   private void sliderRow(String label, double min, double max, double step, DoubleSupplier getter, DoubleConsumer setter, DoubleFunction<String> format) {
+      int y = this.row(label);
+      this.addDrawableChild(new Slider(this.contentRight - 150, center(y, 14), 150, 14, Text.literal(label), min, max, step, getter, setter, format));
+   }
+
+   private int pillRowY(String label) {
+      return center(this.row(label), 14);
+   }
+
+   /** Выравнивает «пилюли» по правому краю строки и добавляет их на экран. */
+   private void placePills(PillToggle... pills) {
+      int x = this.contentRight;
+
+      for (int i = pills.length - 1; i >= 0; i--) {
+         x -= pills[i].getWidth();
+         pills[i].setX(x);
+         x -= 4;
+      }
+
+      for (PillToggle pill : pills) {
+         this.addDrawableChild(pill);
+      }
+   }
+
+   private int row(String label) {
+      Text text = Text.literal(label);
+      return this.row(() -> text);
+   }
+
+   private int row(Supplier<Text> label) {
+      int y = this.nextRowY;
+      this.rows.add(new ActestScreen.Row(y, label));
+      this.nextRowY += 18;
+      return y;
+   }
+
+   private static int center(int rowY, int h) {
+      return rowY + (18 - h) / 2;
+   }
+
+   private void switchCategory(ActestScreen.Category target) {
+      if (category != target) {
+         category = target;
+         this.rebuild = true;
+      }
+   }
+
+   private void selectPage(int index) {
+      if (selectedPage[category.ordinal()] != index) {
+         selectedPage[category.ordinal()] = index;
+         this.rebuild = true;
+      }
+   }
+
+   private static String targetName(ActestConfig.Wallhack.Target target) {
+      return switch (target) {
+         case PLAYERS -> "Игроки";
+         case HOSTILE -> "Враждебные мобы";
+         case PASSIVE -> "Мирные мобы";
+      };
+   }
+
+   private static String targetGenitive(ActestConfig.Wallhack.Target target) {
+      return switch (target) {
+         case PLAYERS -> "игроков";
+         case HOSTILE -> "враждебных";
+         case PASSIVE -> "мирных";
+      };
+   }
+
+   public void render(DrawContext context, int mouseX, int mouseY, float delta) {
+      if (this.rebuild) {
+         this.rebuild = false;
+         this.clearAndInit();
+      }
+
+      super.render(context, mouseX, mouseY, delta);
+   }
+
+   public void renderBackground(DrawContext context, int mouseX, int mouseY, float delta) {
+      int x1 = this.panelX;
+      int y1 = this.panelY;
+      int x2 = this.panelX + this.panelWidth;
+      int y2 = this.panelY + 206;
+      int bodyTop = y1 + 24 + 1;
+      context.fill(0, 0, this.width, this.height, 0x50000000);
+      Theme.roundRect(context, x1 + 2, y1 + 4, x2 + 4, y2 + 6, 4, 0x70000000);
+      Theme.roundRect(context, x1 - 1, y1 - 1, x2 + 1, y2 + 1, 4, 0xFF2C3442);
+      Theme.roundRect(context, x1, y1, x2, y1 + 24, 3, 0xFF1C2230, true, true, false, false);
+      context.fill(x1 + 3, y1, x2 - 3, y1 + 1, 0x14FFFFFF);
+      context.fill(x1, y1 + 24, x2, bodyTop, 0xA05B8CFF);
+      Theme.roundRect(context, x1 + 9, y1 + 8, x1 + 17, y1 + 16, 2, 0xFF5B8CFF);
+      context.drawText(this.textRenderer, Text.literal("AC Test").formatted(Formatting.BOLD), x1 + 22, y1 + 8, 0xFFE6E9EF, false);
+      Theme.roundRect(context, x1, bodyTop, x1 + 86, y2, 3, 0xFF111419, false, false, true, false);
+      context.fill(x1 + 86, bodyTop, x1 + 86 + 1, y2, 0xFF2C3442);
+      Theme.roundRect(context, x1 + 86 + 1, bodyTop, x2, y2, 3, 0xFF161A22, false, false, false, true);
+      this.drawServerStatus(context, x1 + 10, y2 - 14, 66);
+
+      for (ActestScreen.Row row : this.rows) {
+         if (mouseX >= this.contentX - 4 && mouseX < this.contentRight + 4 && mouseY >= row.y() && mouseY < row.y() + 18) {
+            Theme.roundRect(context, this.contentX - 4, row.y(), this.contentRight + 4, row.y() + 18, 2, 0x10FFFFFF);
+         }
+
+         context.drawText(this.textRenderer, row.label().get(), this.contentX, row.y() + 5, 0xFFE6E9EF, false);
+      }
+
+      if (this.page != null && this.page.footer() != null) {
+         this.page.footer().accept(context);
+      }
+   }
+
+   private void drawServerStatus(DrawContext context, int x, int y, int maxWidth) {
+      boolean allowed = this.modules.canEnableModules(this.client);
+      ServerInfo server = this.client.getCurrentServerEntry();
+      String where = this.client.isInSingleplayer() ? "одиночная игра" : (server != null ? server.address : "нет сервера");
+      Theme.roundRect(context, x, y + 1, x + 5, y + 6, 2, allowed ? 0xFF4ADE80 : 0xFFF87171);
+      context.drawText(this.textRenderer, this.textRenderer.trimToWidth(where, maxWidth - 9), x + 9, y, 0xFF8B93A3, false);
+   }
+
+   private int drawKeyLine(DrawContext context, String name, KeyBinding key, int y) {
+      context.drawText(this.textRenderer, name, this.contentX, y, 0xFFE6E9EF, false);
+      Text keyName = (Text)(key.isUnbound() ? Text.literal("—") : key.getBoundKeyLocalizedText());
+      int w = this.textRenderer.getWidth(keyName) + 8;
+      Theme.roundRect(context, this.contentRight - w, y - 2, this.contentRight, y + 10, 2, 0xFF272E3B);
+      context.drawText(this.textRenderer, keyName, this.contentRight - w + 4, y, 0xFFE6E9EF, false);
+      return y + 14;
+   }
+
+   private int drawWrapped(DrawContext context, String text, int y, int color) {
+      for (OrderedText line : this.textRenderer.wrapLines(Text.literal(text), this.contentRight - this.contentX)) {
+         context.drawText(this.textRenderer, line, this.contentX, y, color, false);
+         y += 10;
+      }
+
+      return y;
+   }
+
+   public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+      if (this.modules.getMenuKey().matchesKey(keyCode, scanCode)) {
+         this.close();
+         return true;
+      } else {
+         return super.keyPressed(keyCode, scanCode, modifiers);
+      }
+   }
+
+   public boolean shouldPause() {
+      return false;
+   }
+
+   public void removed() {
+      ActestConfig.save();
+   }
+
+   private static enum Category {
+      MOVEMENT("Движение"),
+      COMBAT("Бой"),
+      RENDER("Визуал"),
+      OTHER("Прочее");
+
+      final String title;
+
+      private Category(String title) {
+         this.title = title;
+      }
+   }
+
+   private static record Page(String title, Module module, Runnable build, Consumer<DrawContext> footer) {
+   }
+
+   private static record Row(int y, Supplier<Text> label) {
+   }
+}

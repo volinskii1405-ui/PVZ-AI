@@ -1,0 +1,13 @@
+{
+  "category.actest": "AC Test Client",
+  "key.actest.speed": "Вкл/выкл Speed",
+  "key.actest.wallhack": "Вкл/выкл WH (ESP)",
+  "key.actest.fly": "Вкл/выкл Fly",
+  "key.actest.nofall": "Вкл/выкл NoFall",
+  "key.actest.noslow": "Вкл/выкл NoSlow",
+  "key.actest.step": "Вкл/выкл Step",
+  "key.actest.reach": "Вкл/выкл Reach",
+  "key.actest.killaura": "Вкл/выкл KillAura",
+  "key.actest.autototem": "Вкл/выкл AutoTotem",
+  "key.actest.menu": "Меню настроек"
+}

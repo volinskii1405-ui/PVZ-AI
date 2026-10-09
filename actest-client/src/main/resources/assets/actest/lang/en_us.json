@@ -1,0 +1,13 @@
+{
+  "category.actest": "AC Test Client",
+  "key.actest.speed": "Toggle Speed",
+  "key.actest.wallhack": "Toggle WH (ESP)",
+  "key.actest.fly": "Toggle Fly",
+  "key.actest.nofall": "Toggle NoFall",
+  "key.actest.noslow": "Toggle NoSlow",
+  "key.actest.step": "Toggle Step",
+  "key.actest.reach": "Toggle Reach",
+  "key.actest.killaura": "Toggle KillAura",
+  "key.actest.autototem": "Toggle AutoTotem",
+  "key.actest.menu": "Open settings menu"
+}
