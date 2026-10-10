@@ -64,6 +64,8 @@ public final class ActestScreen extends Screen {
    private static final int[] selectedPage = new int[ActestScreen.Category.values().length];
    private static ActestConfig.Wallhack.Target colorTarget = ActestConfig.Wallhack.Target.PLAYERS;
    private final ModuleManager modules;
+   /** Адрес, для которого уже нажато «Разрешить» и ждём второго нажатия («Подтвердить»). */
+   private String pendingAllow;
    private final List<ActestScreen.Row> rows = new ArrayList<>();
    private ActestScreen.Page page;
    private boolean rebuild;
@@ -554,20 +556,64 @@ public final class ActestScreen extends Screen {
    private void buildInterface() {
       this.toggleRow("Список модулей на экране", () -> cfg().hud.enabled, v -> cfg().hud.enabled = v);
       this.toggleRow("Лог движения", () -> cfg().debugLog, v -> cfg().debugLog = v)
-         .setTooltip(Tooltip.of(Text.literal("В logs/latest.log: смещение, onGround и NoFall за каждый тик, каждый удар KillAura и перекладывание AutoTotem")));
+         .setTooltip(Tooltip.of(Text.literal("В logs/latest.log: смещение и onGround за каждый тик ([Move]) и каждое действие модулей ([KillAura], [Blink] и т.д.)")));
       int y = this.row("Конфиг actest.json");
       ((FlatButton)this.addDrawableChild(new FlatButton(this.contentRight - 86, center(y, 14), 86, 14, "Перечитать", () -> {
          ActestConfig.load();
          this.rebuild = true;
       }))).setTooltip(Tooltip.of(Text.literal("Загрузить config/actest.json заново, если правили его вручную")));
+      this.serverRow();
+   }
+
+   /** Строка «Сервер: адрес» с кнопкой: «Разрешить» → «Подтвердить» (добавить в allowedServers) или «Убрать». */
+   private void serverRow() {
+      ServerInfo server = this.client.getCurrentServerEntry();
+      if (this.client.isInSingleplayer() || server == null || server.address == null) {
+         String where = this.client.isInSingleplayer() ? "Сервер: одиночная игра" : "Сервер: не подключён";
+         this.row(() -> Text.literal(where).formatted(Formatting.GRAY));
+         return;
+      }
+
+      String address = server.address.trim();
+      boolean allowed = this.modules.canEnableModules(this.client);
+      int y = this.row(this.textRenderer.trimToWidth("Сервер: " + address, this.contentRight - this.contentX - 86 - 8));
+      String text = allowed ? "Убрать" : (address.equals(this.pendingAllow) ? "Подтвердить" : "Разрешить");
+      FlatButton button = (FlatButton)this.addDrawableChild(new FlatButton(this.contentRight - 86, center(y, 14), 86, 14, text, () -> {
+         if (allowed) {
+            ActestConfig.disallowServer(address);
+            this.pendingAllow = null;
+         } else if (address.equals(this.pendingAllow)) {
+            ActestConfig.allowServer(address);
+            this.pendingAllow = null;
+         } else {
+            this.pendingAllow = address;
+         }
+
+         this.rebuild = true;
+      }));
+      button.setTooltip(
+         Tooltip.of(
+            Text.literal(
+               allowed
+                  ? "Убрать этот адрес из allowedServers — модули здесь сразу выключатся"
+                  : "Добавить этот адрес в allowedServers (config/actest.json). Нажмите ещё раз для подтверждения"
+            )
+         )
+      );
    }
 
    private void interfaceHelp(DrawContext context) {
-      this.drawWrapped(
+      int y = this.drawWrapped(
          context,
-         "Лог пишет [Move] на каждый тик (dXZ, dY, onGround — как их получил сервер), [KillAura] на каждый удар и [AutoTotem] на каждое перекладывание.",
+         "Лог пишет [Move] на каждый тик (dXZ, dY, onGround — как их получил сервер) и строку на каждое действие модулей.",
          this.footerY,
          0xFF8B93A3
+      );
+      this.drawWrapped(
+         context,
+         "«Разрешить» (два нажатия) добавляет текущий сервер в allowedServers, «Убрать» — удаляет. Одиночная игра разрешена, пока allowSingleplayer = true.",
+         y + 4,
+         0xFF586070
       );
    }
 
@@ -646,7 +692,7 @@ public final class ActestScreen extends Screen {
       );
       if (!this.modules.canEnableModules(this.client) && !module.isEnabled()) {
          toggle.active = false;
-         toggle.setTooltip(Tooltip.of(Text.literal("Этот сервер не в allowedServers (config/actest.json)")));
+         toggle.setTooltip(Tooltip.of(Text.literal("Сервер не разрешён: Прочее → Интерфейс → «Разрешить»")));
       }
    }
 

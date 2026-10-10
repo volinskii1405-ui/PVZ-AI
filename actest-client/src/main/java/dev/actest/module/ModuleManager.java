@@ -86,7 +86,7 @@ public final class ModuleManager {
          while (module.getKeyBinding().wasPressed()) {
             if (!module.isEnabled() && !allowed) {
                notify(
-                  client, Text.literal(module.getName() + ": сервер не в allowedServers (config/actest.json)").formatted(Formatting.RED)
+                  client, Text.literal(module.getName() + ": сервер не разрешён — меню → Прочее → Интерфейс → «Разрешить»").formatted(Formatting.RED)
                );
             } else {
                module.toggle();

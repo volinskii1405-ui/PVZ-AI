@@ -72,6 +72,39 @@ public final class ActestConfig {
       lastModified = modifiedTime();
    }
 
+   /** Добавить адрес сервера (как в списке серверов) в allowedServers и сохранить конфиг. */
+   public static void allowServer(String address) {
+      String normalized = address.trim().toLowerCase(Locale.ROOT);
+      if (!normalized.isEmpty() && !instance.allowedServers.contains(normalized)) {
+         instance.allowedServers.add(normalized);
+         save();
+         ActestClient.LOGGER.info("Сервер {} добавлен в allowedServers", normalized);
+      }
+   }
+
+   /** Убрать из allowedServers все записи, разрешающие этот адрес (с портом или без), и сохранить конфиг. */
+   public static void disallowServer(String address) {
+      String normalized = address.trim().toLowerCase(Locale.ROOT);
+      String host = stripPort(normalized);
+      boolean removed = instance.allowedServers
+         .removeIf(entry -> entry != null && (entry.trim().equalsIgnoreCase(normalized) || entry.trim().equalsIgnoreCase(host)));
+      if (removed) {
+         save();
+         ActestClient.LOGGER.info("Сервер {} убран из allowedServers", normalized);
+      }
+   }
+
+   /** Та же логика, что в ServerGuard: «host:port» → «host», IPv6 в скобках не трогаем. */
+   private static String stripPort(String address) {
+      if (address.startsWith("[")) {
+         int end = address.indexOf(']');
+         return end > 0 ? address.substring(0, end + 1) : address;
+      }
+
+      int colon = address.indexOf(':');
+      return colon > 0 && colon == address.lastIndexOf(':') ? address.substring(0, colon) : address;
+   }
+
    public static void reloadIfChanged() {
       long modified = modifiedTime();
       if (modified != lastModified) {
