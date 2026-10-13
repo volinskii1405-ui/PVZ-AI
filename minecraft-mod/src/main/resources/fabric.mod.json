@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "biomebeasts",
+  "version": "${version}",
+  "name": "Biome Beasts",
+  "description": "Adds 12 new mobs - one unique creature for each biome. Includes the Bear with bear steak and a bear-hide armor set.",
+  "authors": ["volinskii1405-ui"],
+  "license": "MIT",
+  "environment": "*",
+  "entrypoints": {
+    "main": ["com.biomebeasts.BiomeBeasts"],
+    "client": ["com.biomebeasts.client.BiomeBeastsClient"]
+  },
+  "depends": {
+    "fabricloader": ">=0.16.0",
+    "minecraft": "~1.21.1",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}

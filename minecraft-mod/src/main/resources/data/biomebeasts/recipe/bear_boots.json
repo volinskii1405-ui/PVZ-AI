@@ -1,0 +1,17 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "equipment",
+  "pattern": [
+    "H H",
+    "H H"
+  ],
+  "key": {
+    "H": {
+      "item": "biomebeasts:bear_hide"
+    }
+  },
+  "result": {
+    "id": "biomebeasts:bear_boots",
+    "count": 1
+  }
+}
